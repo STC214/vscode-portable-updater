@@ -1,0 +1,7 @@
+./app.go
+./config.go
+./main.go
+./theme.go
+./updater.go
+./version.go
+./winapi.go
