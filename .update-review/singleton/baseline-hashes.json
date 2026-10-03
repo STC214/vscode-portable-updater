@@ -1,0 +1,17 @@
+[
+    {
+        "Algorithm":  "SHA256",
+        "Hash":  "11658CADC5A36349A66BFCF0604724B92BFB681AEDAB9897D4CC5D7548A44D59",
+        "Path":  "F:\\Project\\04_Desktop_Dev_Utilities\\AutoUpdata_vscode\\main.go"
+    },
+    {
+        "Algorithm":  "SHA256",
+        "Hash":  "14C6A665028D2F78560D0E002894682354D4E40EAAAE949D1690C668D7936609",
+        "Path":  "F:\\Project\\04_Desktop_Dev_Utilities\\AutoUpdata_vscode\\README.md"
+    },
+    {
+        "Algorithm":  "SHA256",
+        "Hash":  "4A61033FAC97B61C0DAFFDE1CA0544A7E4487675FFE13C4CCD3F9201BD4906CF",
+        "Path":  "F:\\Project\\04_Desktop_Dev_Utilities\\AutoUpdata_vscode\\dist\\vscode-portable-updater.exe"
+    }
+]

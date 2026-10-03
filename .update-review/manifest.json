@@ -1,0 +1,26 @@
+﻿[
+    {
+        "Path":  "updater.go",
+        "Backup":  "original\\updater.go",
+        "OriginalHash":  "E3B30D21AC83C78DEF7CF33E60DE803C464B095E0F06989987679DF7EAD22AF8",
+        "ModifiedHash":  "DEF3CAAEF066BDBE13E524448C0C7AA4FD1F309373BD80FFC9530E1F07560A2A"
+    },
+    {
+        "Path":  "README.md",
+        "Backup":  "original\\README.md",
+        "OriginalHash":  "941F797BC79BD8BA5BA87DDF25F94237D0CAA7A3BDDBAB35CC6C8DB9279EBB69",
+        "ModifiedHash":  "785B1D9BD470BBC59D35A9DE094EE28918AB633C7EDC4D5A1565B6B242B56729"
+    },
+    {
+        "Path":  "dist\\vscode-portable-updater.exe",
+        "Backup":  "original\\dist\\vscode-portable-updater.exe",
+        "OriginalHash":  "78A5F31B3E172AE8FA177BC26E3B92C25DF0ECA3FC9C8B214DA8903D656B4907",
+        "ModifiedHash":  "42FD871F1B698FCF1650BBE06ECD209027F1F6DFE30C39444A3A7CD2944A94A6"
+    },
+    {
+        "Path":  "updater_test.go",
+        "Backup":  null,
+        "OriginalHash":  null,
+        "ModifiedHash":  "C1824106BDBB92439256138D978198C9A8889AB0297EB6ED29C2E742431A482E"
+    }
+]

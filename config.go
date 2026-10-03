@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+var configWriteMu sync.Mutex
 
 type Config struct {
 	Paths []string `json:"paths"`
@@ -84,6 +87,8 @@ func loadConfig() (Config, error) {
 }
 
 func saveConfig(cfg Config) error {
+	configWriteMu.Lock()
+	defer configWriteMu.Unlock()
 	if len(cfg.Paths) == 0 {
 		cfg.Paths = []string{""}
 	}

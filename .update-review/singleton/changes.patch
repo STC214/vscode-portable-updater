@@ -1,0 +1,270 @@
+diff --git a/main.go b/main.go
+index 41b3f04..49f50b0 100644
+--- a/main.go
++++ b/main.go
+@@ -1,6 +1,7 @@
+ package main
+ 
+ import (
++	"errors"
+ 	"fmt"
+ 	"os"
+ 	"runtime"
+@@ -8,6 +9,18 @@ import (
+ 
+ func main() {
+ 	runtime.LockOSThread()
++	defer runtime.UnlockOSThread()
++
++	instance, err := acquireSingleInstance(singleInstanceName)
++	if errors.Is(err, errInstanceRunning) {
++		messageBox(0, "程序已经在运行，请使用已打开的窗口。", "AutoUpdate VSCode", MB_OK)
++		return
++	}
++	if err != nil {
++		showFatalError(fmt.Sprintf("单实例检查失败: %v", err))
++		os.Exit(1)
++	}
++	defer instance.Close()
+ 
+ 	app, err := NewApp()
+ 	if err != nil {
+diff --git a/README.md b/README.md
+index 9452049..3983e6d 100644
+--- a/README.md
++++ b/README.md
+@@ -7,6 +7,7 @@
+ ## 功能
+ 
+ - 支持批量配置多个 VSCode 目录
++- 单实例运行：同一台电脑仅允许一个更新器实例；重复启动时提示使用已打开的窗口并退出，避免配置和下载缓存冲突
+ - 自动识别 `x64` 和 `arm64` 版本
+ - 从官方更新地址下载最新稳定版
+ - 自动保留原有 `data` 目录
+diff --git a/singleton_windows.go b/singleton_windows.go
+new file mode 100644
+index 0000000..2769e99
+--- /dev/null
++++ b/singleton_windows.go
+@@ -0,0 +1,51 @@
++package main
++
++import (
++	"errors"
++	"fmt"
++	"sync"
++	"syscall"
++	"unsafe"
++)
++
++// One updater per machine, including copies in other directories/sessions.
++const singleInstanceName = `Global\AutoUpdataVSCode.Singleton.v1`
++
++var (
++	errInstanceRunning = errors.New("程序已经在运行")
++	procCreateMutexW   = kernel32.NewProc("CreateMutexW")
++)
++
++type instanceLock struct {
++	handle syscall.Handle
++	once   sync.Once
++	err    error
++}
++
++func acquireSingleInstance(name string) (*instanceLock, error) {
++	if name == "" {
++		return nil, errors.New("单实例互斥体名称为空")
++	}
++	ptr, err := syscall.UTF16PtrFromString(name)
++	if err != nil {
++		return nil, err
++	}
++	// No thread ownership is required: keep the non-inheritable handle open for
++	// the entire app lifetime. Windows destroys the object after the last close.
++	handle, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(ptr)))
++	if handle == 0 {
++		return nil, fmt.Errorf("创建单实例互斥体失败: %w", callErr)
++	}
++	if errors.Is(callErr, syscall.ERROR_ALREADY_EXISTS) {
++		if err := syscall.CloseHandle(syscall.Handle(handle)); err != nil {
++			return nil, err
++		}
++		return nil, errInstanceRunning
++	}
++	return &instanceLock{handle: syscall.Handle(handle)}, nil
++}
++
++func (lock *instanceLock) Close() error {
++	lock.once.Do(func() { lock.err = syscall.CloseHandle(lock.handle) })
++	return lock.err
++}
+diff --git a/singleton_windows_test.go b/singleton_windows_test.go
+new file mode 100644
+index 0000000..8d680a1
+--- /dev/null
++++ b/singleton_windows_test.go
+@@ -0,0 +1,164 @@
++package main
++
++import (
++	"bufio"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++	"time"
++)
++
++func instanceTestName() string {
++	return fmt.Sprintf(`Global\AutoUpdataVSCode.Test.%d.%d`, os.Getpid(), time.Now().UnixNano())
++}
++
++func TestSingleInstanceLifecycle(t *testing.T) {
++	name := instanceTestName()
++	lock, err := acquireSingleInstance(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { lock.Close() })
++	if duplicate, err := acquireSingleInstance(name); !errors.Is(err, errInstanceRunning) {
++		if duplicate != nil {
++			duplicate.Close()
++		}
++		t.Fatalf("duplicate error=%v", err)
++	}
++	if err := lock.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err := lock.Close(); err != nil {
++		t.Fatal(err)
++	}
++	restarted, err := acquireSingleInstance(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer restarted.Close()
++	t.Log("first launch accepted; duplicate rejected; close/restart accepted")
++}
++
++func TestSingleInstanceInvalidName(t *testing.T) {
++	for _, name := range []string{"", "invalid\x00name", `Global\invalid\nested`} {
++		lock, err := acquireSingleInstance(name)
++		if err == nil {
++			lock.Close()
++			t.Errorf("invalid name accepted: %q", name)
++		}
++	}
++}
++
++// Child helpers never start the GUI or read/write the application's config.
++func TestSingleInstanceChild(t *testing.T) {
++	name := os.Getenv("UPDATER_INSTANCE_TEST_NAME")
++	if name == "" {
++		return
++	}
++	lock, err := acquireSingleInstance(name)
++	if errors.Is(err, errInstanceRunning) {
++		fmt.Println("DUPLICATE")
++		return
++	}
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lock.Close()
++	fmt.Println("LOCKED")
++	io.Copy(io.Discard, os.Stdin)
++}
++
++type instanceChild struct {
++	cmd    *exec.Cmd
++	input  io.WriteCloser
++	output *bufio.Reader
++}
++
++func startInstanceChild(t *testing.T, name string) instanceChild {
++	t.Helper()
++	exe, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command(exe, "-test.run=^TestSingleInstanceChild$", "-test.count=1", "-test.timeout=20s")
++	cmd.Env = append(os.Environ(), "UPDATER_INSTANCE_TEST_NAME="+name)
++	input, err := cmd.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	output, err := cmd.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	cmd.Stderr = os.Stderr
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { input.Close(); cmd.Process.Kill() })
++	return instanceChild{cmd: cmd, input: input, output: bufio.NewReader(output)}
++}
++
++func childStatus(t *testing.T, child instanceChild) string {
++	t.Helper()
++	line, err := child.output.ReadString('\n')
++	if err != nil {
++		t.Fatalf("child status=%q error=%v", line, err)
++	}
++	return strings.TrimSpace(line)
++}
++
++func TestSingleInstanceConcurrentProcesses(t *testing.T) {
++	name := instanceTestName()
++	var children []instanceChild
++	for i := 0; i < 8; i++ {
++		children = append(children, startInstanceChild(t, name))
++	}
++	accepted, rejected := 0, 0
++	for _, child := range children {
++		switch status := childStatus(t, child); status {
++		case "LOCKED":
++			accepted++
++		case "DUPLICATE":
++			rejected++
++		default:
++			t.Errorf("unexpected status=%q", status)
++		}
++	}
++	for _, child := range children {
++		child.input.Close()
++		if err := child.cmd.Wait(); err != nil {
++			t.Error(err)
++		}
++	}
++	if accepted != 1 || rejected != 7 {
++		t.Fatalf("accepted=%d rejected=%d", accepted, rejected)
++	}
++	lock, err := acquireSingleInstance(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	lock.Close()
++	t.Logf("8 concurrent processes: accepted=%d rejected=%d; restart accepted", accepted, rejected)
++}
++
++func TestSingleInstanceAbnormalExit(t *testing.T) {
++	name := instanceTestName()
++	child := startInstanceChild(t, name)
++	if status := childStatus(t, child); status != "LOCKED" {
++		t.Fatalf("status=%s", status)
++	}
++	if err := child.cmd.Process.Kill(); err != nil {
++		t.Fatal(err)
++	}
++	child.cmd.Wait()
++	lock, err := acquireSingleInstance(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	lock.Close()
++	t.Log("terminated holder process; restart accepted without stale lock file")
++}

@@ -1,0 +1,157 @@
+﻿BASELINE inputs: synthetic PE installations, intercepted HTTP, concurrent config saves in test runtime directory.
+COMMAND (cwd=.update-review/fixes/baseline-check): go test -count=1 -v -run TestFix .
+=== RUN   TestFixPackageValidationAndData
+=== RUN   TestFixPackageValidationAndData/packaged_data
+    fixes_test.go:92: original data lost: "" open F:\envs\.runtime\go\tmp\TestFixPackageValidationAndDatapackaged_data739472239\001\install\data\settings.txt: The system cannot find the file specified.
+=== RUN   TestFixPackageValidationAndData/wrapped_valid
+    fixes_test.go:107: errorExpected=false originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/missing_exe
+    fixes_test.go:79: error=<nil>; wantError=true
+=== RUN   TestFixPackageValidationAndData/invalid_exe
+    fixes_test.go:79: error=<nil>; wantError=true
+=== RUN   TestFixPackageValidationAndData/wrong_arch
+    fixes_test.go:79: error=<nil>; wantError=true
+=== RUN   TestFixPackageValidationAndData/wrong_version
+    fixes_test.go:79: error=<nil>; wantError=true
+=== RUN   TestFixPackageValidationAndData/data_not_directory
+    fixes_test.go:79: error=<nil>; wantError=true
+--- FAIL: TestFixPackageValidationAndData (0.17s)
+    --- FAIL: TestFixPackageValidationAndData/packaged_data (0.03s)
+    --- PASS: TestFixPackageValidationAndData/wrapped_valid (0.02s)
+    --- FAIL: TestFixPackageValidationAndData/missing_exe (0.02s)
+    --- FAIL: TestFixPackageValidationAndData/invalid_exe (0.03s)
+    --- FAIL: TestFixPackageValidationAndData/wrong_arch (0.02s)
+    --- FAIL: TestFixPackageValidationAndData/wrong_version (0.02s)
+    --- FAIL: TestFixPackageValidationAndData/data_not_directory (0.02s)
+=== RUN   TestFixVersionQueryDeadline
+    fixes_test.go:118: query deadline=2026-10-03 11:17:57.4654075 +0800 CST m=+1800.181339801 present=true; want ~30s
+--- FAIL: TestFixVersionQueryDeadline (0.02s)
+=== RUN   TestFixCloseWhileUpdating
+    fixes_test.go:135: close handler proceeded while busy: {[should not save while busy]} <nil>
+--- FAIL: TestFixCloseWhileUpdating (0.00s)
+=== RUN   TestFixConcurrentConfigSave
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: Access is denied.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.bak: The system cannot find the file specified.
+    fixes_test.go:156: concurrent save failed: rename F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: open F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: open F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: open F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp: The process cannot access the file because it is being used by another process.
+    fixes_test.go:156: concurrent save failed: open F:\envs\.runtime\go\tmp\go-build4198175689\b001\portable_vscode_updater_data\config.json.tmp: The process cannot access the file because it is being used by another process.
+--- FAIL: TestFixConcurrentConfigSave (0.57s)
+FAIL
+FAIL	autoupdata_vscode	1.611s
+FAIL
+
+EXIT: 1 (expected regression failures)
+COMMAND (cwd=project): go test -count=1 -v .
+=== RUN   TestFixPackageValidationAndData
+=== RUN   TestFixPackageValidationAndData/packaged_data
+    fixes_test.go:107: errorExpected=false originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/wrapped_valid
+    fixes_test.go:107: errorExpected=false originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/missing_exe
+    fixes_test.go:107: errorExpected=true originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/invalid_exe
+    fixes_test.go:107: errorExpected=true originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/wrong_arch
+    fixes_test.go:107: errorExpected=true originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/wrong_version
+    fixes_test.go:107: errorExpected=true originalDataPreserved=true
+=== RUN   TestFixPackageValidationAndData/data_not_directory
+    fixes_test.go:107: errorExpected=true originalDataPreserved=true
+--- PASS: TestFixPackageValidationAndData (0.09s)
+    --- PASS: TestFixPackageValidationAndData/packaged_data (0.03s)
+    --- PASS: TestFixPackageValidationAndData/wrapped_valid (0.03s)
+    --- PASS: TestFixPackageValidationAndData/missing_exe (0.01s)
+    --- PASS: TestFixPackageValidationAndData/invalid_exe (0.01s)
+    --- PASS: TestFixPackageValidationAndData/wrong_arch (0.01s)
+    --- PASS: TestFixPackageValidationAndData/wrong_version (0.01s)
+    --- PASS: TestFixPackageValidationAndData/data_not_directory (0.01s)
+=== RUN   TestFixVersionQueryDeadline
+--- PASS: TestFixVersionQueryDeadline (0.00s)
+=== RUN   TestFixCloseWhileUpdating
+--- PASS: TestFixCloseWhileUpdating (0.00s)
+=== RUN   TestFixConcurrentConfigSave
+--- PASS: TestFixConcurrentConfigSave (0.54s)
+=== RUN   TestUpdateChecksVersionBeforeDownload
+=== RUN   TestUpdateChecksVersionBeforeDownload/equal
+    updater_test.go:145: metadata=1 ZIP=0 error=<nil>
+=== RUN   TestUpdateChecksVersionBeforeDownload/newer
+    updater_test.go:145: metadata=1 ZIP=0 error=<nil>
+=== RUN   TestUpdateChecksVersionBeforeDownload/older
+    updater_test.go:145: metadata=1 ZIP=1 error=<nil>
+=== RUN   TestUpdateChecksVersionBeforeDownload/batch_cache
+    updater_test.go:145: metadata=1 ZIP=1 error=<nil>
+=== RUN   TestUpdateChecksVersionBeforeDownload/name_fallback
+    updater_test.go:145: metadata=1 ZIP=0 error=<nil>
+=== RUN   TestUpdateChecksVersionBeforeDownload/api_error
+    updater_test.go:145: metadata=1 ZIP=0 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadapi_error4129994292\001\install0: 查询官网版本失败: HTTP 503
+=== RUN   TestUpdateChecksVersionBeforeDownload/invalid_json
+    updater_test.go:145: metadata=1 ZIP=0 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadinvalid_json2220236676\001\install0: 解析官网版本失败: unexpected EOF
+=== RUN   TestUpdateChecksVersionBeforeDownload/missing_version
+    updater_test.go:145: metadata=1 ZIP=0 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadmissing_version1172550186\001\install0: 官网版本号格式错误: ""
+=== RUN   TestUpdateChecksVersionBeforeDownload/invalid_version
+    updater_test.go:145: metadata=1 ZIP=0 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadinvalid_version4029537373\001\install0: 官网版本号格式错误: "bad.100.0"
+=== RUN   TestUpdateChecksVersionBeforeDownload/missing_url
+    updater_test.go:145: metadata=1 ZIP=0 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadmissing_url936796114\001\install0: 官网返回的下载地址格式错误
+=== RUN   TestUpdateChecksVersionBeforeDownload/zip_mismatch
+    updater_test.go:145: metadata=1 ZIP=1 error=F:\envs\.runtime\go\tmp\TestUpdateChecksVersionBeforeDownloadzip_mismatch301083434\001\install0: 更新包版本不匹配: 官网 1.100.0，下载包 1.101.0
+--- PASS: TestUpdateChecksVersionBeforeDownload (0.16s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/equal (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/newer (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/older (0.04s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/batch_cache (0.06s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/name_fallback (0.00s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/api_error (0.00s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/invalid_json (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/missing_version (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/invalid_version (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/missing_url (0.01s)
+    --- PASS: TestUpdateChecksVersionBeforeDownload/zip_mismatch (0.01s)
+=== RUN   TestUpdateBatchRechecksVersion
+--- PASS: TestUpdateBatchRechecksVersion (0.01s)
+=== RUN   TestUpdateARM64
+--- PASS: TestUpdateARM64 (0.00s)
+=== RUN   TestCompareVersions
+--- PASS: TestCompareVersions (0.00s)
+PASS
+ok  	autoupdata_vscode	1.613s
+
+EXIT: 0
+COMMAND: go vet .
+
+EXIT: 0
+COMMAND: go test -race -count=1 .
+ok  	autoupdata_vscode	2.913s
+
+EXIT: 0
+COMMAND: go build -ldflags "-H=windowsgui" -o .update-review/fixes/modified/dist/vscode-portable-updater.exe .
+
+EXIT: 0
+COMMAND: & .update-review/fixes/rollback.ps1 -TargetRoot .update-review/fixes/rollback-check
+Restored: updater.go
+Restored: app.go
+Restored: config.go
+Restored: README.md
+Restored: updater_test.go
+Restored: fixes_test.go
+Restored: dist\vscode-portable-updater.exe
+
+EXIT: 0; all restored hashes verified (workspace remains fixed).
+COMMAND: git apply --check --ignore-space-change --directory=.update-review/fixes/patch-check .update-review/fixes/changes.patch; git apply --ignore-space-change --directory=.update-review/fixes/patch-check .update-review/fixes/changes.patch
+EXIT: 0
+COMMAND (cwd=.update-review/fixes/patch-check): go test -count=1 .
+ok  	autoupdata_vscode	1.912s
+
+EXIT: 0
+Patch contents verified against fixed workspace.

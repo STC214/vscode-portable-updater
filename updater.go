@@ -2,17 +2,21 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"debug/pe"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const versionQueryTimeout = 30 * time.Second
 
 type LatestPackage struct {
 	Arch       string
@@ -20,6 +24,13 @@ type LatestPackage struct {
 	Version    string
 	ZipPath    string
 	Downloaded time.Time
+}
+
+type LatestRelease struct {
+	Arch     string
+	Platform string
+	Version  string
+	URL      string
 }
 
 type ProgressUpdate struct {
@@ -33,6 +44,7 @@ type Updater struct {
 	logf      func(string)
 	progressf func(ProgressUpdate)
 	cache     map[string]LatestPackage
+	releases  map[string]LatestRelease
 }
 
 type localPackageJSON struct {
@@ -58,6 +70,7 @@ func NewUpdater(cacheDir string, logf func(string), progressf func(ProgressUpdat
 		logf:      logf,
 		progressf: progressf,
 		cache:     make(map[string]LatestPackage),
+		releases:  make(map[string]LatestRelease),
 	}
 }
 
@@ -72,6 +85,9 @@ func (u *Updater) reportProgress(label string, percent int) {
 }
 
 func (u *Updater) UpdateAll(paths []string) error {
+	// Recheck the official release on each run, while sharing results within a batch.
+	u.releases = make(map[string]LatestRelease)
+	u.cache = make(map[string]LatestPackage)
 	var errs []string
 
 	for i, rawPath := range paths {
@@ -106,17 +122,22 @@ func (u *Updater) updateOne(root string) error {
 	}
 	u.logf(fmt.Sprintf("[%s] 本地版本 %s，架构 %s", info.Root, info.Version, info.Arch))
 
-	latest, err := u.getLatestPackage(info.Arch)
+	release, err := u.getLatestRelease(info.Arch)
 	if err != nil {
 		return err
 	}
 
-	u.logf(fmt.Sprintf("[%s] 官网最新版本 %s", info.Root, latest.Version))
+	u.logf(fmt.Sprintf("[%s] 官网最新版本 %s", info.Root, release.Version))
 
-	if compareVersions(info.Version, latest.Version) >= 0 {
+	if compareVersions(info.Version, release.Version) >= 0 {
 		u.reportProgress("已是最新版本", 100)
 		u.logf(fmt.Sprintf("[%s] 已是最新版本，跳过。", info.Root))
 		return nil
+	}
+
+	latest, err := u.getLatestPackage(release)
+	if err != nil {
+		return err
 	}
 
 	u.logf(fmt.Sprintf("[%s] 开始升级到 %s", info.Root, latest.Version))
@@ -224,9 +245,8 @@ func readVersionFromFile(path string) (string, error) {
 	return pkg.Version, nil
 }
 
-func (u *Updater) getLatestPackage(arch string) (LatestPackage, error) {
-	if cached, ok := u.cache[arch]; ok {
-		u.reportProgress("使用已下载缓存", 100)
+func (u *Updater) getLatestRelease(arch string) (LatestRelease, error) {
+	if cached, ok := u.releases[arch]; ok {
 		return cached, nil
 	}
 
@@ -237,38 +257,98 @@ func (u *Updater) getLatestPackage(arch string) (LatestPackage, error) {
 	case "arm64":
 		platform = "win32-arm64-archive"
 	default:
-		return LatestPackage{}, fmt.Errorf("不支持的架构: %s", arch)
+		return LatestRelease{}, fmt.Errorf("不支持的架构: %s", arch)
 	}
 
-	url := fmt.Sprintf("https://update.code.visualstudio.com/latest/%s/stable", platform)
+	endpoint := fmt.Sprintf("https://update.code.visualstudio.com/api/update/%s/stable/latest", platform)
+	u.logf(fmt.Sprintf("检查官网最新版本: %s", endpoint))
+	u.reportProgress("正在检查最新版本", 0)
+	ctx, cancel := context.WithTimeout(context.Background(), versionQueryTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return LatestRelease{}, err
+	}
+	resp, err := u.client.Do(req)
+	if err != nil {
+		return LatestRelease{}, fmt.Errorf("查询官网版本失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return LatestRelease{}, fmt.Errorf("查询官网版本失败: HTTP %d", resp.StatusCode)
+	}
+	var metadata struct {
+		ProductVersion string `json:"productVersion"`
+		Name           string `json:"name"`
+		URL            string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&metadata); err != nil {
+		return LatestRelease{}, fmt.Errorf("解析官网版本失败: %w", err)
+	}
+	version := strings.TrimSpace(metadata.ProductVersion)
+	if version == "" {
+		version = strings.TrimSpace(metadata.Name)
+	}
+	// The API's "version" field is a commit ID, not a comparable version number.
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return LatestRelease{}, fmt.Errorf("官网版本号格式错误: %q", version)
+	}
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return LatestRelease{}, fmt.Errorf("官网版本号格式错误: %q", version)
+		}
+	}
+	downloadURL, err := url.Parse(metadata.URL)
+	if err != nil || downloadURL.Scheme != "https" || downloadURL.Host == "" {
+		return LatestRelease{}, errors.New("官网返回的下载地址格式错误")
+	}
+	release := LatestRelease{Arch: arch, Platform: platform, Version: version, URL: metadata.URL}
+	u.releases[arch] = release
+	return release, nil
+}
+
+func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error) {
+	arch := release.Arch
+	if cached, ok := u.cache[arch]; ok && cached.Version == release.Version {
+		if _, err := os.Stat(cached.ZipPath); err == nil {
+			u.reportProgress("使用已下载缓存", 100)
+			return cached, nil
+		}
+	}
 	zipPath := filepath.Join(u.cacheDir, fmt.Sprintf("latest-%s.zip", arch))
 	tmpPath := zipPath + ".download"
 
-	u.logf(fmt.Sprintf("开始从官网检查并下载最新 %s 便携包: %s", arch, url))
+	u.logf(fmt.Sprintf("开始下载 %s 版本 %s 便携包: %s", arch, release.Version, release.URL))
 	u.reportProgress("准备下载更新包", 0)
 	if err := os.MkdirAll(u.cacheDir, 0o755); err != nil {
 		return LatestPackage{}, err
 	}
 	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
 
-	if err := downloadFile(u.client, url, tmpPath, func(percent int) {
+	if err := downloadFile(u.client, release.URL, tmpPath, func(percent int) {
 		u.reportProgress("下载更新包", percent)
 	}); err != nil {
 		return LatestPackage{}, fmt.Errorf("下载官方更新包失败: %w", err)
 	}
-	_ = os.Remove(zipPath)
-	if err := os.Rename(tmpPath, zipPath); err != nil {
+	version, err := readVersionFromZip(tmpPath)
+	if err != nil {
 		return LatestPackage{}, err
 	}
-
-	version, err := readVersionFromZip(zipPath)
-	if err != nil {
+	if version != release.Version {
+		return LatestPackage{}, fmt.Errorf("更新包版本不匹配: 官网 %s，下载包 %s", release.Version, version)
+	}
+	if err := os.Remove(zipPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return LatestPackage{}, err
+	}
+	if err := os.Rename(tmpPath, zipPath); err != nil {
 		return LatestPackage{}, err
 	}
 
 	pkg := LatestPackage{
 		Arch:       arch,
-		Platform:   platform,
+		Platform:   release.Platform,
 		Version:    version,
 		ZipPath:    zipPath,
 		Downloaded: time.Now(),
@@ -372,6 +452,7 @@ func (u *Updater) replaceInstall(info InstallInfo, latest LatestPackage) error {
 	if err != nil {
 		return err
 	}
+	defer os.RemoveAll(stagingDir)
 	backupDir := filepath.Join(parent, fmt.Sprintf("%s.backup_old-%d", base, time.Now().UnixNano()))
 
 	u.logf(fmt.Sprintf("[%s] 解压更新包到 %s", info.Root, stagingDir))
@@ -380,33 +461,41 @@ func (u *Updater) replaceInstall(info InstallInfo, latest LatestPackage) error {
 		_ = os.RemoveAll(stagingDir)
 		return fmt.Errorf("解压更新包失败: %w", err)
 	}
+	staged, err := inspectInstall(extractedRoot)
+	if err != nil {
+		return fmt.Errorf("更新包安装结构校验失败: %w", err)
+	}
+	if staged.Version != latest.Version || staged.Arch != info.Arch {
+		return fmt.Errorf("更新包版本或架构不匹配: %s/%s，预期 %s/%s", staged.Version, staged.Arch, latest.Version, info.Arch)
+	}
+	// Prepare user data before touching the original installation. Even a partial
+	// copy failure leaves the original directory and all of its data unchanged.
+	oldData := filepath.Join(info.Root, "data")
+	newData := filepath.Join(extractedRoot, "data")
+	if dataInfo, err := os.Stat(oldData); err == nil {
+		if !dataInfo.IsDir() {
+			return errors.New("原安装的 data 不是目录")
+		}
+		if err := os.RemoveAll(newData); err != nil {
+			return fmt.Errorf("清理更新包自带 data 失败: %w", err)
+		}
+		if err := copyDir(oldData, newData); err != nil {
+			return fmt.Errorf("复制原 data 目录失败: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查原 data 目录失败: %w", err)
+	}
 
 	if err := os.Rename(info.Root, backupDir); err != nil {
 		_ = os.RemoveAll(stagingDir)
 		return fmt.Errorf("无法重命名原目录，请先关闭正在运行的 VSCode: %w", err)
 	}
 
-	restoreOriginal := func() {
-		_ = os.RemoveAll(info.Root)
-		_ = os.Rename(backupDir, info.Root)
-	}
-
 	if err := os.Rename(extractedRoot, info.Root); err != nil {
-		restoreOriginal()
-		return fmt.Errorf("替换新版本目录失败: %w", err)
-	}
-
-	oldData := filepath.Join(backupDir, "data")
-	newData := filepath.Join(info.Root, "data")
-	if _, err := os.Stat(oldData); err == nil {
-		if _, err := os.Stat(newData); errors.Is(err, os.ErrNotExist) {
-			if err := os.Rename(oldData, newData); err != nil {
-				if err := copyDir(oldData, newData); err != nil {
-					restoreOriginal()
-					return fmt.Errorf("迁移 data 目录失败: %w", err)
-				}
-			}
+		if restoreErr := os.Rename(backupDir, info.Root); restoreErr != nil {
+			return errors.Join(fmt.Errorf("替换新版本目录失败: %w", err), fmt.Errorf("恢复原目录失败，备份保留在 %s: %w", backupDir, restoreErr))
 		}
+		return fmt.Errorf("替换新版本目录失败，原目录已恢复: %w", err)
 	}
 
 	if err := os.RemoveAll(backupDir); err != nil {

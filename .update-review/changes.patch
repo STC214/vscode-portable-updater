@@ -1,0 +1,440 @@
+diff --git a/README.md b/README.md
+index 2c5ac5a..af16fc5 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ 一个用于 Windows 的便携版 VSCode 自动更新工具。
+ 
+-它会扫描你配置的 VSCode 安装目录，自动识别当前架构与版本，然后从微软官方更新通道下载对应架构的最新稳定版，完成替换升级。
++它会扫描你配置的 VSCode 安装目录，自动识别当前架构与版本，先查询微软官方更新接口并比较版本号，仅在本地版本较旧时下载对应架构的最新稳定版，完成替换升级。
+ 
+ ## 功能
+ 
+@@ -50,9 +50,11 @@
+ 1. 读取你填写的安装路径
+ 2. 检查 `Code.exe` 和 `resources\app\package.json`
+ 3. 识别当前版本和架构
+-4. 去官方更新接口获取对应架构的最新稳定版
+-5. 解压到临时目录
+-6. 替换旧目录，并尽量保留原有 `data` 目录
++4. 查询官方更新接口，获取对应架构的最新稳定版版本号和下载地址（只请求版本信息，不下载 ZIP）
++5. 比较版本号：本地版本相同或更高时直接跳过，不下载、不替换
++6. 本地版本较旧时才下载更新包，并校验包内版本与查询结果一致；同一批次、同一架构复用下载缓存
++7. 解压到临时目录
++8. 替换旧目录，并尽量保留原有 `data` 目录
+ 
+ ## 配置与缓存位置
+ 
+diff --git a/updater.go b/updater.go
+index 500cf08..3d85a49 100644
+--- a/updater.go
++++ b/updater.go
+@@ -8,6 +8,7 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"net/http"
++	"net/url"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -22,6 +23,13 @@ type LatestPackage struct {
+ 	Downloaded time.Time
+ }
+ 
++type LatestRelease struct {
++	Arch     string
++	Platform string
++	Version  string
++	URL      string
++}
++
+ type ProgressUpdate struct {
+ 	Label   string
+ 	Percent int
+@@ -33,6 +41,7 @@ type Updater struct {
+ 	logf      func(string)
+ 	progressf func(ProgressUpdate)
+ 	cache     map[string]LatestPackage
++	releases  map[string]LatestRelease
+ }
+ 
+ type localPackageJSON struct {
+@@ -58,6 +67,7 @@ func NewUpdater(cacheDir string, logf func(string), progressf func(ProgressUpdat
+ 		logf:      logf,
+ 		progressf: progressf,
+ 		cache:     make(map[string]LatestPackage),
++		releases:  make(map[string]LatestRelease),
+ 	}
+ }
+ 
+@@ -72,6 +82,9 @@ func (u *Updater) reportProgress(label string, percent int) {
+ }
+ 
+ func (u *Updater) UpdateAll(paths []string) error {
++	// Recheck the official release on each run, while sharing results within a batch.
++	u.releases = make(map[string]LatestRelease)
++	u.cache = make(map[string]LatestPackage)
+ 	var errs []string
+ 
+ 	for i, rawPath := range paths {
+@@ -106,19 +119,24 @@ func (u *Updater) updateOne(root string) error {
+ 	}
+ 	u.logf(fmt.Sprintf("[%s] 本地版本 %s，架构 %s", info.Root, info.Version, info.Arch))
+ 
+-	latest, err := u.getLatestPackage(info.Arch)
++	release, err := u.getLatestRelease(info.Arch)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	u.logf(fmt.Sprintf("[%s] 官网最新版本 %s", info.Root, latest.Version))
++	u.logf(fmt.Sprintf("[%s] 官网最新版本 %s", info.Root, release.Version))
+ 
+-	if compareVersions(info.Version, latest.Version) >= 0 {
++	if compareVersions(info.Version, release.Version) >= 0 {
+ 		u.reportProgress("已是最新版本", 100)
+ 		u.logf(fmt.Sprintf("[%s] 已是最新版本，跳过。", info.Root))
+ 		return nil
+ 	}
+ 
++	latest, err := u.getLatestPackage(release)
++	if err != nil {
++		return err
++	}
++
+ 	u.logf(fmt.Sprintf("[%s] 开始升级到 %s", info.Root, latest.Version))
+ 	u.reportProgress("正在替换文件", 100)
+ 	if err := u.replaceInstall(info, latest); err != nil {
+@@ -224,9 +242,8 @@ func readVersionFromFile(path string) (string, error) {
+ 	return pkg.Version, nil
+ }
+ 
+-func (u *Updater) getLatestPackage(arch string) (LatestPackage, error) {
+-	if cached, ok := u.cache[arch]; ok {
+-		u.reportProgress("使用已下载缓存", 100)
++func (u *Updater) getLatestRelease(arch string) (LatestRelease, error) {
++	if cached, ok := u.releases[arch]; ok {
+ 		return cached, nil
+ 	}
+ 
+@@ -237,38 +254,92 @@ func (u *Updater) getLatestPackage(arch string) (LatestPackage, error) {
+ 	case "arm64":
+ 		platform = "win32-arm64-archive"
+ 	default:
+-		return LatestPackage{}, fmt.Errorf("不支持的架构: %s", arch)
++		return LatestRelease{}, fmt.Errorf("不支持的架构: %s", arch)
++	}
++
++	endpoint := fmt.Sprintf("https://update.code.visualstudio.com/api/update/%s/stable/latest", platform)
++	u.logf(fmt.Sprintf("检查官网最新版本: %s", endpoint))
++	u.reportProgress("正在检查最新版本", 0)
++	resp, err := u.client.Get(endpoint)
++	if err != nil {
++		return LatestRelease{}, fmt.Errorf("查询官网版本失败: %w", err)
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return LatestRelease{}, fmt.Errorf("查询官网版本失败: HTTP %d", resp.StatusCode)
++	}
++	var metadata struct {
++		ProductVersion string `json:"productVersion"`
++		Name           string `json:"name"`
++		URL            string `json:"url"`
++	}
++	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&metadata); err != nil {
++		return LatestRelease{}, fmt.Errorf("解析官网版本失败: %w", err)
++	}
++	version := strings.TrimSpace(metadata.ProductVersion)
++	if version == "" {
++		version = strings.TrimSpace(metadata.Name)
+ 	}
++	// The API's "version" field is a commit ID, not a comparable version number.
++	parts := strings.Split(version, ".")
++	if len(parts) != 3 {
++		return LatestRelease{}, fmt.Errorf("官网版本号格式错误: %q", version)
++	}
++	for _, part := range parts {
++		if part == "" || strings.Trim(part, "0123456789") != "" {
++			return LatestRelease{}, fmt.Errorf("官网版本号格式错误: %q", version)
++		}
++	}
++	downloadURL, err := url.Parse(metadata.URL)
++	if err != nil || downloadURL.Scheme != "https" || downloadURL.Host == "" {
++		return LatestRelease{}, errors.New("官网返回的下载地址格式错误")
++	}
++	release := LatestRelease{Arch: arch, Platform: platform, Version: version, URL: metadata.URL}
++	u.releases[arch] = release
++	return release, nil
++}
+ 
+-	url := fmt.Sprintf("https://update.code.visualstudio.com/latest/%s/stable", platform)
++func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error) {
++	arch := release.Arch
++	if cached, ok := u.cache[arch]; ok && cached.Version == release.Version {
++		if _, err := os.Stat(cached.ZipPath); err == nil {
++			u.reportProgress("使用已下载缓存", 100)
++			return cached, nil
++		}
++	}
+ 	zipPath := filepath.Join(u.cacheDir, fmt.Sprintf("latest-%s.zip", arch))
+ 	tmpPath := zipPath + ".download"
+ 
+-	u.logf(fmt.Sprintf("开始从官网检查并下载最新 %s 便携包: %s", arch, url))
++	u.logf(fmt.Sprintf("开始下载 %s 版本 %s 便携包: %s", arch, release.Version, release.URL))
+ 	u.reportProgress("准备下载更新包", 0)
+ 	if err := os.MkdirAll(u.cacheDir, 0o755); err != nil {
+ 		return LatestPackage{}, err
+ 	}
+ 	_ = os.Remove(tmpPath)
++	defer os.Remove(tmpPath)
+ 
+-	if err := downloadFile(u.client, url, tmpPath, func(percent int) {
++	if err := downloadFile(u.client, release.URL, tmpPath, func(percent int) {
+ 		u.reportProgress("下载更新包", percent)
+ 	}); err != nil {
+ 		return LatestPackage{}, fmt.Errorf("下载官方更新包失败: %w", err)
+ 	}
+-	_ = os.Remove(zipPath)
+-	if err := os.Rename(tmpPath, zipPath); err != nil {
++	version, err := readVersionFromZip(tmpPath)
++	if err != nil {
+ 		return LatestPackage{}, err
+ 	}
+-
+-	version, err := readVersionFromZip(zipPath)
+-	if err != nil {
++	if version != release.Version {
++		return LatestPackage{}, fmt.Errorf("更新包版本不匹配: 官网 %s，下载包 %s", release.Version, version)
++	}
++	if err := os.Remove(zipPath); err != nil && !errors.Is(err, os.ErrNotExist) {
++		return LatestPackage{}, err
++	}
++	if err := os.Rename(tmpPath, zipPath); err != nil {
+ 		return LatestPackage{}, err
+ 	}
+ 
+ 	pkg := LatestPackage{
+ 		Arch:       arch,
+-		Platform:   platform,
++		Platform:   release.Platform,
+ 		Version:    version,
+ 		ZipPath:    zipPath,
+ 		Downloaded: time.Now(),
+diff --git a/updater_test.go b/updater_test.go
+new file mode 100644
+index 0000000..8d267bd
+--- /dev/null
++++ b/updater_test.go
+@@ -0,0 +1,211 @@
++package main
++
++import (
++	"archive/zip"
++	"bytes"
++	"encoding/binary"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++type updateTestTransport func(*http.Request) (*http.Response, error)
++
++func (f updateTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func makeTestInstall(t *testing.T, root, version string) string {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Join(root, "resources", "app"), 0755); err != nil {
++		t.Fatal(err)
++	}
++	// Minimal PE image: the updater only needs its machine architecture.
++	image := make([]byte, 96)
++	copy(image, "MZ")
++	binary.LittleEndian.PutUint32(image[60:], 64)
++	copy(image[64:], "PE\x00\x00")
++	binary.LittleEndian.PutUint16(image[68:], IMAGE_FILE_MACHINE_AMD64)
++	if err := os.WriteFile(filepath.Join(root, "Code.exe"), image, 0644); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(root, "resources", "app", "package.json"), []byte(fmt.Sprintf(`{"version":%q}`, version)), 0644); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.MkdirAll(filepath.Join(root, "data"), 0755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(root, "data", "settings.txt"), []byte("preserved"), 0644); err != nil {
++		t.Fatal(err)
++	}
++	return root
++}
++
++func testUpdateZIP(t *testing.T, version string) []byte {
++	t.Helper()
++	var buf bytes.Buffer
++	w := zip.NewWriter(&buf)
++	for name, body := range map[string]string{
++		"Code.exe":                   "updated executable",
++		"resources/app/package.json": fmt.Sprintf(`{"version":%q}`, version),
++	} {
++		f, err := w.Create(name)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if _, err := io.WriteString(f, body); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := w.Close(); err != nil {
++		t.Fatal(err)
++	}
++	return buf.Bytes()
++}
++
++func TestUpdateChecksVersionBeforeDownload(t *testing.T) {
++	for _, tc := range []struct {
++		name, local, metadata, zipVersion string
++		status, installs, downloads       int
++		wantError                         bool
++	}{
++		{"equal", "1.100.0", `{"productVersion":"1.100.0","version":"commit-id","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 0, false},
++		{"newer", "1.101.0", `{"productVersion":"1.100.0","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 0, false},
++		{"older", "1.99.0", `{"productVersion":"1.100.0","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 1, false},
++		{"batch_cache", "1.99.0", `{"productVersion":"1.100.0","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 2, 1, false},
++		{"name_fallback", "1.100.0", `{"name":"1.100.0","version":"commit-id","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 0, false},
++		{"api_error", "1.99.0", `{}`, "1.100.0", 503, 1, 0, true},
++		{"invalid_json", "1.99.0", `{`, "1.100.0", 200, 1, 0, true},
++		{"missing_version", "1.99.0", `{"version":"commit-id","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 0, true},
++		{"invalid_version", "1.99.0", `{"productVersion":"bad.100.0","url":"https://packages.test/update.zip"}`, "1.100.0", 200, 1, 0, true},
++		{"missing_url", "1.99.0", `{"productVersion":"1.100.0"}`, "1.100.0", 200, 1, 0, true},
++		{"zip_mismatch", "1.99.0", `{"productVersion":"1.100.0","url":"https://packages.test/update.zip"}`, "1.101.0", 200, 1, 1, true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			base := t.TempDir()
++			var paths []string
++			for i := 0; i < tc.installs; i++ {
++				paths = append(paths, makeTestInstall(t, filepath.Join(base, fmt.Sprintf("install%d", i)), tc.local))
++			}
++			metadataCalls, downloads := 0, 0
++			u := NewUpdater(filepath.Join(base, "cache"), func(string) {}, nil)
++			u.client.Transport = updateTestTransport(func(r *http.Request) (*http.Response, error) {
++				status, body := 200, ""
++				if strings.HasPrefix(r.URL.Path, "/api/update/") {
++					if r.URL.Path != "/api/update/win32-x64-archive/stable/latest" {
++						t.Errorf("metadata path: %s", r.URL.Path)
++					}
++					metadataCalls++
++					status, body = tc.status, tc.metadata
++				} else {
++					downloads++
++					if metadataCalls == 0 {
++						t.Errorf("ZIP requested before metadata")
++					}
++					body = string(testUpdateZIP(t, tc.zipVersion))
++				}
++				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Header: make(http.Header)}, nil
++			})
++			err := u.UpdateAll(paths)
++			if (err != nil) != tc.wantError {
++				t.Errorf("error = %v, wantError = %v", err, tc.wantError)
++			}
++			if metadataCalls != 1 || downloads != tc.downloads {
++				t.Errorf("metadata=%d ZIP=%d; want 1/%d", metadataCalls, downloads, tc.downloads)
++			}
++			for _, root := range paths {
++				version, err := readVersionFromFile(filepath.Join(root, "resources", "app", "package.json"))
++				want := tc.local
++				if tc.downloads > 0 && !tc.wantError {
++					want = tc.zipVersion
++				}
++				if err != nil || version != want {
++					t.Errorf("installed version=%s err=%v; want %s", version, err, want)
++				}
++				data, err := os.ReadFile(filepath.Join(root, "data", "settings.txt"))
++				if err != nil || string(data) != "preserved" {
++					t.Errorf("data changed: %q %v", data, err)
++				}
++			}
++			if tc.downloads == 0 {
++				if _, err := os.Stat(u.cacheDir); !os.IsNotExist(err) {
++					t.Errorf("unexpected cache directory: %v", err)
++				}
++			}
++			if _, err := os.Stat(filepath.Join(u.cacheDir, "latest-x64.zip.download")); !os.IsNotExist(err) {
++				t.Errorf("temporary download retained: %v", err)
++			}
++			t.Logf("metadata=%d ZIP=%d error=%v", metadataCalls, downloads, err)
++		})
++	}
++}
++
++func TestUpdateBatchRechecksVersion(t *testing.T) {
++	base := t.TempDir()
++	root := makeTestInstall(t, filepath.Join(base, "install"), "1.100.0")
++	u := NewUpdater(filepath.Join(base, "cache"), func(string) {}, nil)
++	calls := 0
++	u.client.Transport = updateTestTransport(func(r *http.Request) (*http.Response, error) {
++		calls++
++		if !strings.HasPrefix(r.URL.Path, "/api/update/") {
++			t.Errorf("unexpected ZIP request")
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"productVersion":"1.100.0","url":"https://packages.test/update.zip"}`))}, nil
++	})
++	for i := 0; i < 2; i++ {
++		if err := u.UpdateAll([]string{root}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if calls != 2 {
++		t.Errorf("metadata calls=%d; want 2", calls)
++	}
++}
++
++func TestUpdateARM64(t *testing.T) {
++	base := t.TempDir()
++	root := makeTestInstall(t, filepath.Join(base, "install"), "1.100.0")
++	imagePath := filepath.Join(root, "Code.exe")
++	image, err := os.ReadFile(imagePath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	binary.LittleEndian.PutUint16(image[68:], IMAGE_FILE_MACHINE_ARM64)
++	if err := os.WriteFile(imagePath, image, 0644); err != nil {
++		t.Fatal(err)
++	}
++	u := NewUpdater(filepath.Join(base, "cache"), func(string) {}, nil)
++	calls := 0
++	u.client.Transport = updateTestTransport(func(r *http.Request) (*http.Response, error) {
++		calls++
++		if r.URL.Path != "/api/update/win32-arm64-archive/stable/latest" {
++			t.Errorf("unexpected path: %s", r.URL.Path)
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"productVersion":"1.100.0","url":"https://packages.test/arm64.zip"}`))}, nil
++	})
++	if err := u.UpdateAll([]string{root}); err != nil {
++		t.Fatal(err)
++	}
++	if calls != 1 {
++		t.Errorf("requests=%d; want 1", calls)
++	}
++}
++
++func TestCompareVersions(t *testing.T) {
++	for _, tc := range []struct {
++		a, b string
++		want int
++	}{
++		{"1.99.0", "1.100.0", -1},
++		{"1.100.0", "1.100.0", 0},
++		{"1.101.0", "1.100.0", 1},
++		{"1.100.1", "1.100.0", 1},
++		{"1.100", "1.100.0", 0},
++	} {
++		if got := compareVersions(tc.a, tc.b); got != tc.want {
++			t.Errorf("compare(%s, %s)=%d; want %d", tc.a, tc.b, got, tc.want)
++		}
++	}
++}

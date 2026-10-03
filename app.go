@@ -202,6 +202,10 @@ func (a *App) WndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		a.runUITasks()
 		return 0
 	case WM_CLOSE:
+		if a.busy {
+			a.appendLog("更新正在进行，请等待完成后再关闭窗口。")
+			return 0
+		}
 		a.syncPathsFromUI()
 		if err := a.saveConfigNow(); err != nil {
 			a.appendLog(fmt.Sprintf("保存配置失败: %v", err))
@@ -565,11 +569,11 @@ func (a *App) scheduleConfigSave() {
 	}
 	a.saveTimer = time.AfterFunc(400*time.Millisecond, func() {
 		a.saveMu.Lock()
+		defer a.saveMu.Unlock()
 		isLatest := seq == a.saveSeq
 		if isLatest {
 			a.saveTimer = nil
 		}
-		a.saveMu.Unlock()
 
 		if !isLatest {
 			return
@@ -588,13 +592,12 @@ func (a *App) saveConfigNow() error {
 	cfg := cloneConfig(a.config)
 
 	a.saveMu.Lock()
+	defer a.saveMu.Unlock()
 	a.saveSeq++
 	if a.saveTimer != nil {
 		a.saveTimer.Stop()
 		a.saveTimer = nil
 	}
-	a.saveMu.Unlock()
-
 	return saveConfig(cfg)
 }
 

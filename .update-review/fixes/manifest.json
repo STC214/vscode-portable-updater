@@ -1,0 +1,44 @@
+﻿[
+    {
+        "Path":  "updater.go",
+        "Backup":  "original\\updater.go",
+        "OriginalHash":  "DEF3CAAEF066BDBE13E524448C0C7AA4FD1F309373BD80FFC9530E1F07560A2A",
+        "ModifiedHash":  "4631B2DAF1237A4187FBEE1467C8B8CA7D1DAD324AE8A6EA4BFA44E19229EB10"
+    },
+    {
+        "Path":  "app.go",
+        "Backup":  "original\\app.go",
+        "OriginalHash":  "2A7C980B2C871BF7F8878D4266752317A69D705578B31B582083B1932AFEA112",
+        "ModifiedHash":  "5AFF4188E8DE69BDE63F30A4BD77E6DF1AA249AF72D56699E3BB0DA220203B85"
+    },
+    {
+        "Path":  "config.go",
+        "Backup":  "original\\config.go",
+        "OriginalHash":  "DC530984A3DF4F6C0BBAC657937D6EBFB2404192E079AA762C5205EA4999C9FA",
+        "ModifiedHash":  "9D34F8353EA7AC4220BF98C267E27EB5A3D46CECCBF637151B4B74EF477EEB8F"
+    },
+    {
+        "Path":  "README.md",
+        "Backup":  "original\\README.md",
+        "OriginalHash":  "785B1D9BD470BBC59D35A9DE094EE28918AB633C7EDC4D5A1565B6B242B56729",
+        "ModifiedHash":  "14C6A665028D2F78560D0E002894682354D4E40EAAAE949D1690C668D7936609"
+    },
+    {
+        "Path":  "updater_test.go",
+        "Backup":  "original\\updater_test.go",
+        "OriginalHash":  "C1824106BDBB92439256138D978198C9A8889AB0297EB6ED29C2E742431A482E",
+        "ModifiedHash":  "C0B0EC4CA5542EADAD487E943EA749B55511AF1EA9153CD17F4327D8D228549F"
+    },
+    {
+        "Path":  "fixes_test.go",
+        "Backup":  null,
+        "OriginalHash":  null,
+        "ModifiedHash":  "CEA4511C045E23D941D3DE033AC16C3A4AAD9AEF24634C78374EC03FDFEBFDD4"
+    },
+    {
+        "Path":  "dist\\vscode-portable-updater.exe",
+        "Backup":  "original\\dist\\vscode-portable-updater.exe",
+        "OriginalHash":  "42FD871F1B698FCF1650BBE06ECD209027F1F6DFE30C39444A3A7CD2944A94A6",
+        "ModifiedHash":  "4A61033FAC97B61C0DAFFDE1CA0544A7E4487675FFE13C4CCD3F9201BD4906CF"
+    }
+]
