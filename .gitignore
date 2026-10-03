@@ -1,0 +1,12 @@
+# Local review snapshots and build caches
+/.update-review/
+/.tmp/
+/.gocache/
+
+# Download cache and partial downloads (keep runtime config.json)
+/dist/portable_vscode_updater_data/cache/
+*.download
+
+# Superseded test builds
+/dist/audit-build.exe
+/dist/autoupdata_vscode_new.exe
