@@ -1,12 +1,31 @@
-# Local review snapshots and build caches
+# Review snapshots and verification workspaces
 /.update-review/
+
+# Local Go build / temporary directories (build.ps1)
 /.tmp/
 /.gocache/
 
-# Download cache and partial downloads (keep runtime config.json)
-/dist/portable_vscode_updater_data/cache/
-*.download
+# Generated binaries, download cache, and machine-specific runtime config
+/dist/
+/portable_vscode_updater_data/
 
-# Superseded test builds
-/dist/audit-build.exe
-/dist/autoupdata_vscode_new.exe
+# Interrupted downloads and editor temporary files
+*.download
+*.swp
+*.swo
+*~
+
+# Test / coverage outputs
+*.test
+*.test.exe
+/coverage/
+/coverage.out
+/coverage.html
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep Go source/tests, go.mod/go.sum, build.ps1, and icon resources tracked.
+# Existing tracked files are not removed by ignore rules.
