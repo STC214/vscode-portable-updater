@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -529,15 +530,31 @@ func (a *App) maxScroll() int32 {
 }
 
 func (a *App) appendLog(line string) {
+	text := time.Now().Format("2006-01-02 15:04:05.000") + " " + strings.TrimRight(line, "\r\n") + "\r\n"
+	if a.storageDir != "" {
+		if err := appendLogFile(a.storageDir, text); err != nil {
+			text += fmt.Sprintf("日志落盘失败: %v\r\n", err)
+		}
+	}
 	if a.logEdit == 0 {
 		return
 	}
-	text := line
-	if !strings.HasSuffix(text, "\r\n") {
-		text += "\r\n"
-	}
 	sendMessage(a.logEdit, EM_SETSEL, ^uintptr(0), ^uintptr(0))
 	sendMessage(a.logEdit, EM_REPLACESEL, 0, uintptr(unsafe.Pointer(mustUTF16Ptr(text))))
+}
+
+// Daily files keep historical runs inspectable without mixing GUI state.
+func appendLogFile(storageDir, text string) error {
+	logDir := filepath.Join(storageDir, "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(logDir, time.Now().Format("2006-01-02")+".log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.WriteString(text)
+	return errors.Join(writeErr, f.Close())
 }
 
 func (a *App) invokeUI(fn func()) {

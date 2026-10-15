@@ -39,12 +39,14 @@ type ProgressUpdate struct {
 }
 
 type Updater struct {
-	cacheDir  string
-	client    *http.Client
-	logf      func(string)
-	progressf func(ProgressUpdate)
-	cache     map[string]LatestPackage
-	releases  map[string]LatestRelease
+	cacheDir    string
+	client      *http.Client
+	logf        func(string)
+	progressf   func(ProgressUpdate)
+	cache       map[string]LatestPackage
+	releases    map[string]LatestRelease
+	rename      func(string, string) error // injectable filesystem failure tests
+	checkClosed func(string) error
 }
 
 type localPackageJSON struct {
@@ -62,8 +64,13 @@ type InstallInfo struct {
 }
 
 func NewUpdater(cacheDir string, logf func(string), progressf func(ProgressUpdate)) *Updater {
+	if logf == nil {
+		logf = func(string) {}
+	}
 	return &Updater{
-		cacheDir: cacheDir,
+		cacheDir:    cacheDir,
+		rename:      os.Rename,
+		checkClosed: ensureInstallClosed,
 		client: &http.Client{
 			Timeout: 30 * time.Minute,
 		},
@@ -112,6 +119,12 @@ func (u *Updater) updateOne(root string) error {
 		return errors.New("目标路径位于 C 盘，按要求不会对其进行写入或更新")
 	}
 
+	if err := pendingInstallTransaction(root); err != nil {
+		return err
+	}
+	if err := validateInstallTarget(root, u.cacheDir); err != nil {
+		return err
+	}
 	info, err := inspectInstall(root)
 	if err != nil {
 		return err
@@ -122,7 +135,9 @@ func (u *Updater) updateOne(root string) error {
 	}
 	u.logf(fmt.Sprintf("[%s] 本地版本 %s，架构 %s", info.Root, info.Version, info.Arch))
 
+	queryStart := time.Now()
 	release, err := u.getLatestRelease(info.Arch)
+	u.logf(fmt.Sprintf("版本查询耗时 %s", time.Since(queryStart).Round(time.Millisecond)))
 	if err != nil {
 		return err
 	}
@@ -135,6 +150,9 @@ func (u *Updater) updateOne(root string) error {
 		return nil
 	}
 
+	if err := u.checkClosed(info.Root); err != nil {
+		return err
+	}
 	latest, err := u.getLatestPackage(release)
 	if err != nil {
 		return err
@@ -317,6 +335,17 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 		}
 	}
 	zipPath := filepath.Join(u.cacheDir, fmt.Sprintf("latest-%s.zip", arch))
+	// Validate CRC, layout, version and architecture, not just package.json.
+	cacheCheckStart := time.Now()
+	if err := validatePackageArchive(zipPath, release); err == nil {
+		u.logf(fmt.Sprintf("磁盘更新包完整校验耗时 %s", time.Since(cacheCheckStart).Round(time.Millisecond)))
+		version := release.Version
+		pkg := LatestPackage{Arch: arch, Platform: release.Platform, Version: version, ZipPath: zipPath}
+		u.cache[arch] = pkg
+		u.logf(fmt.Sprintf("复用磁盘更新包缓存: %s，版本 %s", zipPath, version))
+		u.reportProgress("使用磁盘缓存", 100)
+		return pkg, nil
+	}
 	tmpPath := zipPath + ".download"
 
 	u.logf(fmt.Sprintf("开始下载 %s 版本 %s 便携包: %s", arch, release.Version, release.URL))
@@ -327,18 +356,20 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	_ = os.Remove(tmpPath)
 	defer os.Remove(tmpPath)
 
+	downloadStart := time.Now()
 	if err := downloadFile(u.client, release.URL, tmpPath, func(percent int) {
 		u.reportProgress("下载更新包", percent)
 	}); err != nil {
 		return LatestPackage{}, fmt.Errorf("下载官方更新包失败: %w", err)
 	}
-	version, err := readVersionFromZip(tmpPath)
-	if err != nil {
+	u.logf(fmt.Sprintf("下载耗时 %s", time.Since(downloadStart).Round(time.Millisecond)))
+	u.reportProgress("校验更新包完整性", 100)
+	validationStart := time.Now()
+	if err := validatePackageArchive(tmpPath, release); err != nil {
 		return LatestPackage{}, err
 	}
-	if version != release.Version {
-		return LatestPackage{}, fmt.Errorf("更新包版本不匹配: 官网 %s，下载包 %s", release.Version, version)
-	}
+	u.logf(fmt.Sprintf("更新包完整校验耗时 %s", time.Since(validationStart).Round(time.Millisecond)))
+	version := release.Version
 	if err := os.Remove(zipPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return LatestPackage{}, err
 	}
@@ -358,7 +389,7 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	return pkg, nil
 }
 
-func downloadFile(client *http.Client, url, targetPath string, report func(int)) error {
+func downloadFile(client *http.Client, url, targetPath string, report func(int)) (resultErr error) {
 	resp, err := client.Get(url)
 	if err != nil {
 		return err
@@ -373,7 +404,7 @@ func downloadFile(client *http.Client, url, targetPath string, report func(int))
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 
 	total := resp.ContentLength
 	written := int64(0)
@@ -421,12 +452,16 @@ func readVersionFromZip(zipPath string) (string, error) {
 	defer reader.Close()
 
 	for _, file := range reader.File {
-		if strings.HasSuffix(strings.ToLower(file.Name), "resources/app/package.json") {
+		name := strings.ToLower(strings.ReplaceAll(file.Name, `\`, "/"))
+		if name == "resources/app/package.json" || (strings.Count(name, "/") == 3 && strings.HasSuffix(name, "/resources/app/package.json")) {
 			rc, err := file.Open()
 			if err != nil {
 				return "", err
 			}
-			data, err := io.ReadAll(rc)
+			data, err := io.ReadAll(io.LimitReader(rc, 4*1024*1024+1))
+			if err == nil && len(data) > 4*1024*1024 {
+				err = errors.New("更新包 package.json 过大")
+			}
 			rc.Close()
 			if err != nil {
 				return "", err
@@ -446,21 +481,35 @@ func readVersionFromZip(zipPath string) (string, error) {
 }
 
 func (u *Updater) replaceInstall(info InstallInfo, latest LatestPackage) error {
+	if err := pendingInstallTransaction(info.Root); err != nil {
+		return err
+	}
+	if err := validateInstallTarget(info.Root, u.cacheDir); err != nil {
+		return err
+	}
 	parent := filepath.Dir(info.Root)
 	base := filepath.Base(info.Root)
 	stagingDir, err := os.MkdirTemp(parent, base+".update_staging-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(stagingDir)
+	// Never remove staging when it may contain the only copy of user data.
+	cleanupStaging := true
+	defer func() {
+		if cleanupStaging {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
 	backupDir := filepath.Join(parent, fmt.Sprintf("%s.backup_old-%d", base, time.Now().UnixNano()))
 
+	u.reportProgress("解压更新包", 0)
 	u.logf(fmt.Sprintf("[%s] 解压更新包到 %s", info.Root, stagingDir))
+	start := time.Now()
 	extractedRoot, err := extractZip(latest.ZipPath, stagingDir)
 	if err != nil {
-		_ = os.RemoveAll(stagingDir)
 		return fmt.Errorf("解压更新包失败: %w", err)
 	}
+	u.logf(fmt.Sprintf("解压耗时 %s", time.Since(start).Round(time.Millisecond)))
 	staged, err := inspectInstall(extractedRoot)
 	if err != nil {
 		return fmt.Errorf("更新包安装结构校验失败: %w", err)
@@ -468,42 +517,91 @@ func (u *Updater) replaceInstall(info InstallInfo, latest LatestPackage) error {
 	if staged.Version != latest.Version || staged.Arch != info.Arch {
 		return fmt.Errorf("更新包版本或架构不匹配: %s/%s，预期 %s/%s", staged.Version, staged.Arch, latest.Version, info.Arch)
 	}
-	// Prepare user data before touching the original installation. Even a partial
-	// copy failure leaves the original directory and all of its data unchanged.
 	oldData := filepath.Join(info.Root, "data")
 	newData := filepath.Join(extractedRoot, "data")
-	if dataInfo, err := os.Stat(oldData); err == nil {
-		if !dataInfo.IsDir() {
-			return errors.New("原安装的 data 不是目录")
+	hasData := false
+	if dataInfo, err := os.Lstat(oldData); err == nil {
+		// Reparse points need explicit treatment; do not move or traverse their targets.
+		if !dataInfo.IsDir() || dataInfo.Mode()&os.ModeSymlink != 0 {
+			return errors.New("原安装的 data 必须是普通目录")
 		}
+		hasData = true
 		if err := os.RemoveAll(newData); err != nil {
 			return fmt.Errorf("清理更新包自带 data 失败: %w", err)
-		}
-		if err := copyDir(oldData, newData); err != nil {
-			return fmt.Errorf("复制原 data 目录失败: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("检查原 data 目录失败: %w", err)
 	}
 
-	if err := os.Rename(info.Root, backupDir); err != nil {
-		_ = os.RemoveAll(stagingDir)
-		return fmt.Errorf("无法重命名原目录，请先关闭正在运行的 VSCode: %w", err)
+	if err := u.checkClosed(info.Root); err != nil {
+		return err
 	}
-
-	if err := os.Rename(extractedRoot, info.Root); err != nil {
-		if restoreErr := os.Rename(backupDir, info.Root); restoreErr != nil {
-			return errors.Join(fmt.Errorf("替换新版本目录失败: %w", err), fmt.Errorf("恢复原目录失败，备份保留在 %s: %w", backupDir, restoreErr))
+	current, err := inspectInstall(info.Root)
+	if err != nil {
+		return err
+	}
+	if current.Version != info.Version || current.Arch != info.Arch || !strings.EqualFold(current.AppRoot, info.AppRoot) {
+		return errors.New("下载或解压期间原安装已变化，请重新检查更新")
+	}
+	journal, err := writeInstallTransaction(info.Root, backupDir, extractedRoot)
+	if err != nil {
+		return err
+	}
+	transactionComplete := false
+	defer func() {
+		if transactionComplete {
+			if err := os.Remove(journal); err != nil {
+				u.logf(fmt.Sprintf("清理事务记录失败: %v", err))
+			}
 		}
-		return fmt.Errorf("替换新版本目录失败，原目录已恢复: %w", err)
+	}()
+	start = time.Now()
+	u.logf(fmt.Sprintf("目录切换准备：旧程序备份 %s；新版暂存 %s；data 使用同卷重命名迁移", backupDir, extractedRoot))
+	u.reportProgress("迁移数据并切换目录", 0)
+	cleanupStaging = false // after this point even panic must retain possible user data
+	if err := u.rename(info.Root, backupDir); err != nil {
+		cleanupStaging = true
+		transactionComplete = true
+		return fmt.Errorf("重命名原目录失败，请先关闭 VSCode: %w", err)
 	}
+	backupData := filepath.Join(backupDir, "data")
+	dataMoved := false
+	rollback := func(cause error) error {
+		if dataMoved {
+			if err := u.rename(newData, backupData); err != nil {
+				cleanupStaging = false
+				return errors.Join(cause, fmt.Errorf("数据回滚失败；数据保留于 %s，原程序保留于 %s: %w", newData, backupDir, err))
+			}
+			dataMoved = false
+		}
+		if err := u.rename(backupDir, info.Root); err != nil {
+			return errors.Join(cause, fmt.Errorf("目录回滚失败，完整原安装保留于 %s: %w", backupDir, err))
+		}
+		cleanupStaging = true
+		transactionComplete = true
+		u.logf("切换失败，已恢复原安装和 data")
+		return cause
+	}
+	if hasData {
+		if err := u.rename(backupData, newData); err != nil {
+			return rollback(fmt.Errorf("迁移 data 失败: %w", err))
+		}
+		dataMoved = true
+	}
+	if err := u.rename(extractedRoot, info.Root); err != nil {
+		return rollback(fmt.Errorf("切换新版目录失败: %w", err))
+	}
+	cleanupStaging = true
+	transactionComplete = true
+	u.logf(fmt.Sprintf("数据迁移及目录切换耗时 %s（目录重命名，未复制 data）", time.Since(start).Round(time.Millisecond)))
 
+	start = time.Now()
+	u.reportProgress("清理旧程序文件", 100)
+	// data has already moved out: cleanup only deletes the old application.
 	if err := os.RemoveAll(backupDir); err != nil {
-		u.logf(fmt.Sprintf("[%s] 清理旧目录失败，可稍后手动删除: %v", info.Root, err))
+		u.logf(fmt.Sprintf("旧程序清理失败，保留于 %s: %v", backupDir, err))
 	}
-	if err := os.RemoveAll(stagingDir); err != nil {
-		u.logf(fmt.Sprintf("[%s] 清理临时目录失败，可稍后手动删除: %v", info.Root, err))
-	}
+	u.logf(fmt.Sprintf("旧程序清理耗时 %s", time.Since(start).Round(time.Millisecond)))
 	return nil
 }
 
@@ -516,7 +614,11 @@ func extractZip(zipPath, targetDir string) (string, error) {
 
 	targetPrefix := strings.ToLower(filepath.Clean(targetDir) + string(os.PathSeparator))
 	for _, file := range reader.File {
-		cleanName := filepath.Clean(file.Name)
+		safeName, err := archiveName(file)
+		if err != nil {
+			return "", err
+		}
+		cleanName := filepath.FromSlash(safeName)
 		fullPath := filepath.Join(targetDir, cleanName)
 		fullLower := strings.ToLower(fullPath)
 		if !strings.HasPrefix(fullLower, targetPrefix) && !strings.EqualFold(fullPath, filepath.Clean(targetDir)) {
@@ -548,8 +650,9 @@ func extractZip(zipPath, targetDir string) (string, error) {
 			src.Close()
 			return "", err
 		}
-		dst.Close()
-		src.Close()
+		if err := errors.Join(dst.Close(), src.Close()); err != nil {
+			return "", err
+		}
 	}
 
 	entries, err := os.ReadDir(targetDir)
@@ -566,41 +669,4 @@ func extractZip(zipPath, targetDir string) (string, error) {
 	}
 
 	return "", errors.New("解压后未找到 VSCode 根目录")
-}
-
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-
-		out, err := os.Create(target)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			out.Close()
-			return err
-		}
-		return out.Close()
-	})
 }
