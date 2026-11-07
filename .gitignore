@@ -1,7 +1,7 @@
 # Review snapshots and verification workspaces
 /.update-review/
 
-# Local Go build / temporary directories (build.ps1)
+# Legacy local cache names; current scripts use ignored /dist/.build/.
 /.tmp/
 /.gocache/
 

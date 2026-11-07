@@ -92,6 +92,8 @@
 .\build.ps1
 ```
 
+根目录入口委托给 `scripts\build.ps1`。临时文件和 Go 编译缓存统一放在 `dist\.build\`，不再散落根目录。已有图标资源可直接构建；修改 `assets\app-icon.ico` 后使用 `.\build.ps1 -RegenerateIcon` 重新生成资源（需要 `rsrc.exe`）。可通过 `-OutputPath` 指定其他构建输出位置。
+
 构建完成后，生成的可执行文件会输出到：
 
 - `dist\vscode-portable-updater.exe`
@@ -102,27 +104,31 @@
 
 ## 项目结构
 
-- `main.go`：程序入口
-- `app.go`：窗口、界面与交互逻辑
-- `updater.go`：版本检测、下载、解压和替换逻辑
-- `download.go`：可配置 3–64 路分段下载、版本标识与响应校验、重试及单连接回退
-- `worker_selector.go`：3–64 线程下拉选择、默认值恢复与更新期间锁定
-- `config.go`：配置读写与存储目录管理
-- `version.go`：版本号比较
-- `winapi.go`：Windows API 封装
-- `theme.go`：界面主题与绘制
-- `build.ps1`：构建脚本
-- `dist/`：构建输出目录
+```text
+.
+├─ cmd/vscode-portable-updater/  Go 源码、同包测试、Windows .syso 资源
+├─ assets/                     图标与原始图片
+├─ scripts/                    构建及测试脚本
+├─ docs/reviews/                审查记录
+├─ dist/                       构建产物、验证记录及 .build 缓存
+├─ build.ps1                   保持兼容的根目录构建入口
+├─ go.mod
+├─ README.md
+├─ CHANGELOG.md
+└─ .gitignore
+```
+
+Go 源码与测试保持同包，未拆分或改写业务逻辑。`main.go` 为入口，`app.go`/`layout.go`/`theme.go` 负责界面，`updater.go`/`download.go` 负责更新与下载。`.syso` 必须放在 Go 包目录参与链接；图标源文件位于 `assets/`。
 
 ### 下载器回归测试
 
 ```powershell
-go test -race -count=3 ./...
+.\scripts\test.ps1 -Race -Count 3
 go vet ./...
-go test -run '^$' -fuzz '^FuzzDownloadContentRange$' -fuzztime=20s -parallel=4 .
+go test -run '^$' -fuzz '^FuzzDownloadContentRange$' -fuzztime=20s -parallel=4 ./cmd/vscode-portable-updater
 ```
 
-真实网络下载测试默认跳过。显式设置 `UPDATER_TEST_DOWNLOAD_URL`、`UPDATER_TEST_DOWNLOAD_PATH` 和 `UPDATER_TEST_DOWNLOAD_VERSION` 后，运行 `go test -count=1 -v -run '^TestDownload16Official$' .`，仅下载并校验 x64 官方 ZIP，不执行安装。测试输出路径也应选择非 C 盘目录。
+测试脚本同样将临时文件和缓存放入 `dist\.build\`。真实网络下载测试默认跳过。显式设置 `UPDATER_TEST_DOWNLOAD_URL`、`UPDATER_TEST_DOWNLOAD_PATH` 和 `UPDATER_TEST_DOWNLOAD_VERSION` 后，运行 `go test -count=1 -v -run '^TestDownload16Official$' ./cmd/vscode-portable-updater`，仅下载并校验 x64 官方 ZIP，不执行安装。测试输出路径也应选择非 C 盘目录。
 
 ## 常见问题
 
