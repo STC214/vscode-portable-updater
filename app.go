@@ -39,13 +39,15 @@ type App struct {
 	hwnd      HWND
 	font      HFONT
 
-	addButton     HWND
-	updateButton  HWND
-	progressBar   HWND
-	progressLabel HWND
-	logEdit       HWND
-	workerLabel   HWND
-	workerSelect  HWND
+	addButton            HWND
+	updateButton         HWND
+	progressBar          HWND
+	progressLabel        HWND
+	logEdit              HWND
+	workerLabel          HWND
+	workerSelect         HWND
+	workerDropdownActive bool
+	workerRestorePending bool
 
 	rows   []PathRow
 	config Config
@@ -320,15 +322,8 @@ func (a *App) onCommand(wParam uintptr) {
 	code := highWord(wParam)
 
 	switch {
-	case id == workerSelectID && code == CBN_SELCHANGE:
-		if a.busy {
-			sendMessage(a.workerSelect, CB_SETCURSEL, uintptr(normalizeDownloadWorkers(a.config.DownloadWorkers)-minDownloadWorkers), 0)
-			return
-		}
-		a.syncPathsFromUI()
-		if err := a.saveConfigNow(); err != nil {
-			a.appendLog(fmt.Sprintf("保存下载线程设置失败: %v", err))
-		}
+	case id == workerSelectID:
+		a.onDownloadWorkerSelection(code)
 	case id == buttonAddID && code == BN_CLICKED:
 		a.syncPathsFromUI()
 		a.config.Paths = append(a.config.Paths, "")
@@ -367,7 +362,6 @@ func (a *App) deleteRow(index int) {
 }
 
 func (a *App) syncPathsFromUI() {
-	a.config.DownloadWorkers = a.selectedDownloadWorkers()
 	if len(a.rows) == 0 {
 		return
 	}
@@ -421,8 +415,8 @@ func (a *App) layout() {
 	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
 	logTop := height - margin - logHeight
 	pathHeight := logTop - pathTop - margin
-	if pathHeight < 80 {
-		pathHeight = 80
+	if pathHeight < 0 {
+		pathHeight = 0
 	}
 
 	setWindowPos(a.logEdit, margin, logTop, width-margin*2, logHeight, SWP_NOZORDER|SWP_NOACTIVATE)
@@ -432,18 +426,22 @@ func (a *App) layout() {
 		contentHeight -= rowGap
 	}
 	maxScroll := contentHeight - pathHeight
-	if maxScroll < 0 {
+	if maxScroll < 0 || pathHeight == 0 {
 		maxScroll = 0
 	}
 	if a.scrollPos > maxScroll {
 		a.scrollPos = maxScroll
 	}
 
+	scrollMaximum := max(int32(0), contentHeight-1) // Win32 maximum is inclusive.
+	if pathHeight == 0 {
+		scrollMaximum = 0
+	}
 	scrollInfo := SCROLLINFO{
 		CbSize: uint32(unsafe.Sizeof(SCROLLINFO{})),
 		FMask:  SIF_ALL,
 		NMin:   0,
-		NMax:   contentHeight,
+		NMax:   scrollMaximum,
 		NPage:  uint32(pathHeight),
 		NPos:   a.scrollPos,
 	}
@@ -456,7 +454,7 @@ func (a *App) layout() {
 
 	for i, row := range a.rows {
 		y := pathTop + int32(i)*(rowHeight+rowGap) - a.scrollPos
-		if y+rowHeight < pathTop || y > logTop-margin {
+		if y < pathTop || y+rowHeight > logTop-margin {
 			showWindow(row.edit, SW_HIDE)
 			showWindow(row.remove, SW_HIDE)
 			continue
@@ -534,8 +532,8 @@ func (a *App) maxScroll() int32 {
 	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
 	logTop := height - margin - logHeight
 	pathHeight := logTop - pathTop - margin
-	if pathHeight < 80 {
-		pathHeight = 80
+	if pathHeight < 0 {
+		pathHeight = 0
 	}
 
 	contentHeight := int32(len(a.rows)) * (rowHeight + rowGap)
@@ -543,7 +541,7 @@ func (a *App) maxScroll() int32 {
 		contentHeight -= rowGap
 	}
 	maxScroll := contentHeight - pathHeight
-	if maxScroll < 0 {
+	if maxScroll < 0 || pathHeight == 0 {
 		maxScroll = 0
 	}
 	return maxScroll
