@@ -10,6 +10,8 @@
 - 单实例运行：同一台电脑仅允许一个更新器实例；重复启动时提示使用已打开的窗口并退出，避免配置和下载缓存冲突
 - 自动识别 `x64` 和 `arm64` 版本
 - 从官方更新地址下载最新稳定版
+- 默认 16 路 HTTP Range 分段并发下载（至少 4 MiB 且服务器提供强 ETag 或满足强校验条件的 Last-Modified 时），每段最多尝试 3 次，连续 2 分钟无数据则重试；整个下载最多 30 分钟。服务器忽略 Range（包括探测后忽略）、小文件或缺少稳定版本标识时使用单连接
+- 分段失败只重试该段；本轮重试耗尽后仍清理临时文件，不支持跨次启动续传
 - 自动保留原有 `data` 目录
 - 内置进度条和日志窗口，便于查看更新过程
 - 配置和缓存都保存在程序旁边的本地目录，适合便携使用
@@ -98,12 +100,23 @@
 - `main.go`：程序入口
 - `app.go`：窗口、界面与交互逻辑
 - `updater.go`：版本检测、下载、解压和替换逻辑
+- `download.go`：16 路分段下载、版本标识与响应校验、重试及单连接回退
 - `config.go`：配置读写与存储目录管理
 - `version.go`：版本号比较
 - `winapi.go`：Windows API 封装
 - `theme.go`：界面主题与绘制
 - `build.ps1`：构建脚本
 - `dist/`：构建输出目录
+
+### 下载器回归测试
+
+```powershell
+go test -race -count=3 ./...
+go vet ./...
+go test -run '^$' -fuzz '^FuzzDownloadContentRange$' -fuzztime=20s -parallel=4 .
+```
+
+真实网络下载测试默认跳过。显式设置 `UPDATER_TEST_DOWNLOAD_URL`、`UPDATER_TEST_DOWNLOAD_PATH` 和 `UPDATER_TEST_DOWNLOAD_VERSION` 后，运行 `go test -count=1 -v -run '^TestDownload16Official$' .`，仅下载并校验 x64 官方 ZIP，不执行安装。测试输出路径也应选择非 C 盘目录。
 
 ## 常见问题
 

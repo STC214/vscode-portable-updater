@@ -349,6 +349,7 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	tmpPath := zipPath + ".download"
 
 	u.logf(fmt.Sprintf("开始下载 %s 版本 %s 便携包: %s", arch, release.Version, release.URL))
+	u.logf(fmt.Sprintf("下载策略：默认 %d 路分段并发；不支持分段时使用单连接", defaultDownloadWorkers))
 	u.reportProgress("准备下载更新包", 0)
 	if err := os.MkdirAll(u.cacheDir, 0o755); err != nil {
 		return LatestPackage{}, err
@@ -389,22 +390,26 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	return pkg, nil
 }
 
-func downloadFile(client *http.Client, url, targetPath string, report func(int)) (resultErr error) {
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
-	}
+func downloadSingleResponse(resp *http.Response, targetPath string, report func(int)) (resultErr error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if err := validateDownloadEncoding(resp); err != nil {
+		return err
 	}
 
 	file, err := os.Create(targetPath)
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	defer func() {
+		resultErr = errors.Join(resultErr, file.Close())
+		if resultErr == nil && report != nil {
+			report(100)
+		}
+	}()
 
 	total := resp.ContentLength
 	written := int64(0)
@@ -414,15 +419,15 @@ func downloadFile(client *http.Client, url, targetPath string, report func(int))
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if total >= 0 && int64(n) > total-written {
+				return errors.New("download exceeds Content-Length")
+			}
 			if _, err := file.Write(buf[:n]); err != nil {
 				return err
 			}
 			written += int64(n)
 			if report != nil && total > 0 {
-				percent := int(written * 100 / total)
-				if percent > 100 {
-					percent = 100
-				}
+				percent := min(99, int(float64(written)/float64(total)*100))
 				if percent != lastReported {
 					lastReported = percent
 					report(percent)
@@ -438,8 +443,8 @@ func downloadFile(client *http.Client, url, targetPath string, report func(int))
 		}
 	}
 
-	if report != nil {
-		report(100)
+	if total >= 0 && written != total {
+		return io.ErrUnexpectedEOF
 	}
 	return nil
 }
