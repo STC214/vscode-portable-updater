@@ -14,13 +14,28 @@ import (
 )
 
 const defaultDownloadWorkers = 16
+const minDownloadWorkers = 3
+const maxDownloadWorkers = 64
+const minParallelDownloadSize = 4 * 1024 * 1024
 const downloadAttempts = 3
 const downloadIdleTimeout = 2 * time.Minute
 
 var errRangeIgnored = errors.New("server ignored byte ranges")
 
+func normalizeDownloadWorkers(workers int) int {
+	if workers == 0 {
+		return defaultDownloadWorkers
+	}
+	return max(minDownloadWorkers, min(maxDownloadWorkers, workers))
+}
+
 // Probe with GET rather than HEAD: reuse a 200 response when Range is ignored.
 func downloadFile(client *http.Client, url, targetPath string, report func(int)) error {
+	return downloadFileWithWorkers(client, url, targetPath, defaultDownloadWorkers, report)
+}
+
+func downloadFileWithWorkers(client *http.Client, url, targetPath string, workers int, report func(int)) error {
+	workers = normalizeDownloadWorkers(workers)
 	if report != nil {
 		callback := report
 		var progressMu sync.Mutex
@@ -72,10 +87,10 @@ func downloadFile(client *http.Client, url, targetPath string, report func(int))
 		return err
 	}
 	// Tiny files and servers without a stable representation validator use one stream.
-	if total < defaultDownloadWorkers*256*1024 || validator == "" {
+	if total < minParallelDownloadSize || validator == "" {
 		return downloadSingleRequest(ctx, client, url, targetPath, report)
 	}
-	err = downloadRanges(ctx, client, url, targetPath, total, validator, report)
+	err = downloadRanges(ctx, client, url, targetPath, total, validator, report, workers)
 	if errors.Is(err, errRangeIgnored) {
 		// All workers have stopped and closed their bodies before replacing the file.
 		return downloadSingleRequest(ctx, client, url, targetPath, report)
@@ -140,7 +155,8 @@ func parseDownloadRange(value string, start, end int64) (int64, error) {
 	return total, nil
 }
 
-func downloadRanges(parent context.Context, client *http.Client, url, path string, total int64, validator string, report func(int)) (resultErr error) {
+func downloadRanges(parent context.Context, client *http.Client, url, path string, total int64, validator string, report func(int), workers int) (resultErr error) {
+	workers = normalizeDownloadWorkers(workers)
 	file, err := os.Create(path)
 	if err != nil {
 		return err
@@ -163,9 +179,9 @@ func downloadRanges(parent context.Context, client *http.Client, url, path strin
 	if report != nil {
 		report(0)
 	}
-	for i := 0; i < defaultDownloadWorkers; i++ {
-		start := downloadBoundary(total, i)
-		end := downloadBoundary(total, i+1) - 1
+	for i := 0; i < workers; i++ {
+		start := downloadBoundary(total, i, workers)
+		end := downloadBoundary(total, i+1, workers) - 1
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -213,8 +229,8 @@ func downloadRanges(parent context.Context, client *http.Client, url, path strin
 }
 
 // Avoid total*i overflow even for an untrusted Content-Range near MaxInt64.
-func downloadBoundary(total int64, i int) int64 {
-	return total/defaultDownloadWorkers*int64(i) + (total%defaultDownloadWorkers)*int64(i)/defaultDownloadWorkers
+func downloadBoundary(total int64, i, workers int) int64 {
+	return total/int64(workers)*int64(i) + (total%int64(workers))*int64(i)/int64(workers)
 }
 
 type downloadIdleReader struct {

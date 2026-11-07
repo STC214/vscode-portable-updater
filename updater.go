@@ -39,14 +39,15 @@ type ProgressUpdate struct {
 }
 
 type Updater struct {
-	cacheDir    string
-	client      *http.Client
-	logf        func(string)
-	progressf   func(ProgressUpdate)
-	cache       map[string]LatestPackage
-	releases    map[string]LatestRelease
-	rename      func(string, string) error // injectable filesystem failure tests
-	checkClosed func(string) error
+	downloadWorkers int
+	cacheDir        string
+	client          *http.Client
+	logf            func(string)
+	progressf       func(ProgressUpdate)
+	cache           map[string]LatestPackage
+	releases        map[string]LatestRelease
+	rename          func(string, string) error // injectable filesystem failure tests
+	checkClosed     func(string) error
 }
 
 type localPackageJSON struct {
@@ -64,13 +65,18 @@ type InstallInfo struct {
 }
 
 func NewUpdater(cacheDir string, logf func(string), progressf func(ProgressUpdate)) *Updater {
+	return NewUpdaterWithWorkers(cacheDir, defaultDownloadWorkers, logf, progressf)
+}
+
+func NewUpdaterWithWorkers(cacheDir string, workers int, logf func(string), progressf func(ProgressUpdate)) *Updater {
 	if logf == nil {
 		logf = func(string) {}
 	}
 	return &Updater{
-		cacheDir:    cacheDir,
-		rename:      os.Rename,
-		checkClosed: ensureInstallClosed,
+		downloadWorkers: normalizeDownloadWorkers(workers),
+		cacheDir:        cacheDir,
+		rename:          os.Rename,
+		checkClosed:     ensureInstallClosed,
 		client: &http.Client{
 			Timeout: 30 * time.Minute,
 		},
@@ -349,7 +355,7 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	tmpPath := zipPath + ".download"
 
 	u.logf(fmt.Sprintf("开始下载 %s 版本 %s 便携包: %s", arch, release.Version, release.URL))
-	u.logf(fmt.Sprintf("下载策略：默认 %d 路分段并发；不支持分段时使用单连接", defaultDownloadWorkers))
+	u.logf(fmt.Sprintf("下载策略：%d 路分段并发；不支持分段时使用单连接", normalizeDownloadWorkers(u.downloadWorkers)))
 	u.reportProgress("准备下载更新包", 0)
 	if err := os.MkdirAll(u.cacheDir, 0o755); err != nil {
 		return LatestPackage{}, err
@@ -358,7 +364,7 @@ func (u *Updater) getLatestPackage(release LatestRelease) (LatestPackage, error)
 	defer os.Remove(tmpPath)
 
 	downloadStart := time.Now()
-	if err := downloadFile(u.client, release.URL, tmpPath, func(percent int) {
+	if err := downloadFileWithWorkers(u.client, release.URL, tmpPath, u.downloadWorkers, func(percent int) {
 		u.reportProgress("下载更新包", percent)
 	}); err != nil {
 		return LatestPackage{}, fmt.Errorf("下载官方更新包失败: %w", err)

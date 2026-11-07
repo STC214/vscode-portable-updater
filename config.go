@@ -13,12 +13,14 @@ import (
 var configWriteMu sync.Mutex
 
 type Config struct {
-	Paths []string `json:"paths"`
+	Paths           []string `json:"paths"`
+	DownloadWorkers int      `json:"download_workers"`
 }
 
 func cloneConfig(cfg Config) Config {
 	out := Config{
-		Paths: append([]string(nil), cfg.Paths...),
+		Paths:           append([]string(nil), cfg.Paths...),
+		DownloadWorkers: normalizeDownloadWorkers(cfg.DownloadWorkers),
 	}
 	if len(out.Paths) == 0 {
 		out.Paths = []string{""}
@@ -71,7 +73,7 @@ func loadConfig() (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Config{Paths: []string{""}}, nil
+			return cloneConfig(Config{}), nil
 		}
 		return Config{}, err
 	}
@@ -83,10 +85,11 @@ func loadConfig() (Config, error) {
 	if len(cfg.Paths) == 0 {
 		cfg.Paths = []string{""}
 	}
-	return cfg, nil
+	return cloneConfig(cfg), nil
 }
 
 func saveConfig(cfg Config) error {
+	cfg = cloneConfig(cfg)
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
 	if len(cfg.Paths) == 0 {

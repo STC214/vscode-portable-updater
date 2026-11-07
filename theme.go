@@ -94,7 +94,7 @@ func (a *App) handleCtlColor(msg uint32, hdc HDC, ctrl HWND) uintptr {
 		setBkMode(hdc, OPAQUE)
 		return uintptr(theme.inputBrush)
 	default:
-		if msg == WM_CTLCOLOREDIT {
+		if msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX {
 			setTextColor(hdc, theme.textColor)
 			setBkColor(hdc, theme.inputColor)
 			setBkMode(hdc, OPAQUE)

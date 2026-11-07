@@ -15,15 +15,18 @@ import (
 const (
 	appClassName = "AutoUpdateVSCodeMainWindow"
 
-	buttonAddID      = 100
-	buttonUpdateID   = 101
-	logEditID        = 102
-	progressLabelID  = 103
-	progressBarID    = 104
-	rowEditIDBase    = 1000
-	rowDeleteIDBase  = 2000
-	uiInvokeMessage  = WM_APP + 1
-	progressBarClass = "msctls_progress32"
+	buttonAddID                  = 100
+	buttonUpdateID               = 101
+	logEditID                    = 102
+	progressLabelID              = 103
+	progressBarID                = 104
+	workerLabelID                = 105
+	workerSelectID               = 106
+	downloadSettingsHeight int32 = 34
+	rowEditIDBase                = 1000
+	rowDeleteIDBase              = 2000
+	uiInvokeMessage              = WM_APP + 1
+	progressBarClass             = "msctls_progress32"
 )
 
 type PathRow struct {
@@ -41,6 +44,8 @@ type App struct {
 	progressBar   HWND
 	progressLabel HWND
 	logEdit       HWND
+	workerLabel   HWND
+	workerSelect  HWND
 
 	rows   []PathRow
 	config Config
@@ -192,7 +197,7 @@ func (a *App) WndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			a.scrollBy(48)
 		}
 		return 0
-	case WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC:
+	case WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_CTLCOLORLISTBOX:
 		return a.handleCtlColor(msg, HDC(wParam), HWND(lParam))
 	case WM_DRAWITEM:
 		if a.handleDrawItem(lParam) {
@@ -231,6 +236,9 @@ func (a *App) initUI() error {
 	}
 	a.updateButton, err = a.newButton("检查并自动更新", buttonUpdateID)
 	if err != nil {
+		return err
+	}
+	if err := a.initDownloadWorkerControls(); err != nil {
 		return err
 	}
 	a.progressLabel, err = a.newLabel("空闲 0%", progressLabelID)
@@ -312,6 +320,15 @@ func (a *App) onCommand(wParam uintptr) {
 	code := highWord(wParam)
 
 	switch {
+	case id == workerSelectID && code == CBN_SELCHANGE:
+		if a.busy {
+			sendMessage(a.workerSelect, CB_SETCURSEL, uintptr(normalizeDownloadWorkers(a.config.DownloadWorkers)-minDownloadWorkers), 0)
+			return
+		}
+		a.syncPathsFromUI()
+		if err := a.saveConfigNow(); err != nil {
+			a.appendLog(fmt.Sprintf("保存下载线程设置失败: %v", err))
+		}
 	case id == buttonAddID && code == BN_CLICKED:
 		a.syncPathsFromUI()
 		a.config.Paths = append(a.config.Paths, "")
@@ -350,6 +367,7 @@ func (a *App) deleteRow(index int) {
 }
 
 func (a *App) syncPathsFromUI() {
+	a.config.DownloadWorkers = a.selectedDownloadWorkers()
 	if len(a.rows) == 0 {
 		return
 	}
@@ -396,9 +414,11 @@ func (a *App) layout() {
 	setWindowPos(a.addButton, margin, margin, 110, buttonHeight, SWP_NOZORDER|SWP_NOACTIVATE)
 	setWindowPos(a.updateButton, margin+120, margin, 180, buttonHeight, SWP_NOZORDER|SWP_NOACTIVATE)
 	setWindowPos(a.progressLabel, width-margin-progressLabelWidth, margin+6, progressLabelWidth, 22, SWP_NOZORDER|SWP_NOACTIVATE)
-	setWindowPos(a.progressBar, margin, margin+buttonHeight+10, width-margin*2, progressHeight, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.workerLabel, margin, margin+buttonHeight+10, 150, 24, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.workerSelect, margin+154, margin+buttonHeight+6, 90, 240, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.progressBar, margin, margin+buttonHeight+10+downloadSettingsHeight, width-margin*2, progressHeight, SWP_NOZORDER|SWP_NOACTIVATE)
 
-	pathTop := margin + buttonHeight + 10 + progressHeight + margin
+	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
 	logTop := height - margin - logHeight
 	pathHeight := logTop - pathTop - margin
 	if pathHeight < 80 {
@@ -511,7 +531,7 @@ func (a *App) maxScroll() int32 {
 		logHeight = 140
 	}
 
-	pathTop := margin + buttonHeight + 10 + progressHeight + margin
+	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
 	logTop := height - margin - logHeight
 	pathHeight := logTop - pathTop - margin
 	if pathHeight < 80 {
@@ -636,16 +656,17 @@ func (a *App) startUpdate() {
 		return
 	}
 
-	a.busy = true
+	workers := a.config.DownloadWorkers
+	a.setUpdateBusy(true)
 	a.setProgress("准备更新", 0)
-	enableWindow(a.updateButton, false)
 	if err := a.saveConfigNow(); err != nil {
 		a.appendLog(fmt.Sprintf("保存配置失败: %v", err))
 	}
 
-	go func(paths []string) {
-		updater := NewUpdater(
+	go func(paths []string, workers int) {
+		updater := NewUpdaterWithWorkers(
 			a.cacheDir,
+			workers,
 			func(message string) {
 				a.invokeUI(func() {
 					a.appendLog(message)
@@ -661,8 +682,7 @@ func (a *App) startUpdate() {
 		start := time.Now()
 		err := updater.UpdateAll(paths)
 		a.invokeUI(func() {
-			a.busy = false
-			enableWindow(a.updateButton, true)
+			a.setUpdateBusy(false)
 			if err != nil {
 				a.setProgress("更新失败", 0)
 				a.appendLog(fmt.Sprintf("更新结束，存在错误: %v", err))
@@ -671,7 +691,7 @@ func (a *App) startUpdate() {
 				a.appendLog(fmt.Sprintf("更新完成，总耗时 %s", time.Since(start).Round(time.Second)))
 			}
 		})
-	}(paths)
+	}(paths, workers)
 }
 
 func normalizeInputPath(path string) string {

@@ -160,7 +160,7 @@ func TestDownloadReviewCanceledParent(t *testing.T) {
 		t.Error("request after cancellation")
 		return nil, context.Canceled
 	})}
-	err := downloadRanges(ctx, client, "https://fixture.test/canceled", filepath.Join(t.TempDir(), "out"), 4*1024*1024, `"fixture"`, nil)
+	err := downloadRanges(ctx, client, "https://fixture.test/canceled", filepath.Join(t.TempDir(), "out"), 4*1024*1024, `"fixture"`, nil, defaultDownloadWorkers)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want cancellation, got %v", err)
 	}
@@ -170,7 +170,7 @@ func TestDownloadReviewBoundary(t *testing.T) {
 	for _, total := range []int64{4 * 1024 * 1024, 4194307, math.MaxInt64 - 7, math.MaxInt64} {
 		prev := int64(0)
 		for i := 0; i <= 16; i++ {
-			boundary := downloadBoundary(total, i)
+			boundary := downloadBoundary(total, i, defaultDownloadWorkers)
 			if boundary < prev || boundary < 0 || boundary > total {
 				t.Fatalf("total=%d index=%d boundary=%d previous=%d", total, i, boundary, prev)
 			}
@@ -246,7 +246,7 @@ func FuzzDownloadContentRange(f *testing.F) {
 			}
 			prev := int64(0)
 			for i := 0; i <= 16; i++ {
-				n := downloadBoundary(total, i)
+				n := downloadBoundary(total, i, defaultDownloadWorkers)
 				if n < prev || n > total {
 					t.Fatalf("boundary overflow total=%d i=%d n=%d", total, i, n)
 				}
