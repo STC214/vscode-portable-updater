@@ -8,7 +8,11 @@ import (
 
 func (a *App) initDownloadWorkerControls() error {
 	var err error
-	a.workerLabel, err = a.newLabel("下载线程（3-64）：", workerLabelID)
+	a.workerLabel, err = a.newLabel("下载线程", workerLabelID)
+	if err != nil {
+		return err
+	}
+	a.workerHint, err = a.newLabel("3–64", workerHintID)
 	if err != nil {
 		return err
 	}

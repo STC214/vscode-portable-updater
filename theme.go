@@ -83,6 +83,11 @@ func (a *App) handleCtlColor(msg uint32, hdc HDC, ctrl HWND) uintptr {
 	theme := ensureTheme()
 
 	switch ctrl {
+	case a.workerHint:
+		setTextColor(hdc, theme.mutedTextColor)
+		setBkColor(hdc, theme.windowColor)
+		setBkMode(hdc, TRANSPARENT)
+		return uintptr(theme.windowBrush)
 	case a.progressLabel:
 		setTextColor(hdc, theme.textColor)
 		setBkColor(hdc, theme.windowColor)

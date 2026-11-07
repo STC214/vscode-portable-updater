@@ -15,18 +15,18 @@ import (
 const (
 	appClassName = "AutoUpdateVSCodeMainWindow"
 
-	buttonAddID                  = 100
-	buttonUpdateID               = 101
-	logEditID                    = 102
-	progressLabelID              = 103
-	progressBarID                = 104
-	workerLabelID                = 105
-	workerSelectID               = 106
-	downloadSettingsHeight int32 = 34
-	rowEditIDBase                = 1000
-	rowDeleteIDBase              = 2000
-	uiInvokeMessage              = WM_APP + 1
-	progressBarClass             = "msctls_progress32"
+	buttonAddID      = 100
+	buttonUpdateID   = 101
+	logEditID        = 102
+	progressLabelID  = 103
+	progressBarID    = 104
+	workerLabelID    = 105
+	workerSelectID   = 106
+	workerHintID     = 107
+	rowEditIDBase    = 1000
+	rowDeleteIDBase  = 2000
+	uiInvokeMessage  = WM_APP + 1
+	progressBarClass = "msctls_progress32"
 )
 
 type PathRow struct {
@@ -45,6 +45,7 @@ type App struct {
 	progressLabel        HWND
 	logEdit              HWND
 	workerLabel          HWND
+	workerHint           HWND
 	workerSelect         HWND
 	workerDropdownActive bool
 	workerRestorePending bool
@@ -176,6 +177,14 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 func (a *App) WndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
+	case WM_GETMINMAXINFO:
+		if lParam != 0 {
+			var info *MINMAXINFO
+			*(*uintptr)(unsafe.Pointer(&info)) = lParam
+			info.MinTrackSize.X = max(info.MinTrackSize.X, 600)
+			info.MinTrackSize.Y = max(info.MinTrackSize.Y, 320)
+		}
+		return 0
 	case WM_CREATE:
 		if err := a.initUI(); err != nil {
 			showFatalError(fmt.Sprintf("创建界面失败: %v", err))
@@ -243,7 +252,7 @@ func (a *App) initUI() error {
 	if err := a.initDownloadWorkerControls(); err != nil {
 		return err
 	}
-	a.progressLabel, err = a.newLabel("空闲 0%", progressLabelID)
+	a.progressLabel, err = a.newControl("STATIC", "空闲 0%", WS_CHILD|WS_VISIBLE|SS_RIGHT, progressLabelID)
 	if err != nil {
 		return err
 	}
@@ -391,35 +400,24 @@ func (a *App) layout() {
 	rowGap := int32(8)
 	deleteWidth := int32(96)
 	buttonGap := int32(10)
-	progressLabelWidth := int32(220)
-	progressHeight := int32(18)
-
-	logHeight := height / 3
-	if logHeight < 190 {
-		logHeight = 190
-	}
-	if logHeight > height-220 {
-		logHeight = height - 220
-	}
-	if logHeight < 140 {
-		logHeight = 140
-	}
+	geometry := calculateVerticalLayout(height)
 
 	setWindowPos(a.addButton, margin, margin, 110, buttonHeight, SWP_NOZORDER|SWP_NOACTIVATE)
 	setWindowPos(a.updateButton, margin+120, margin, 180, buttonHeight, SWP_NOZORDER|SWP_NOACTIVATE)
-	setWindowPos(a.progressLabel, width-margin-progressLabelWidth, margin+6, progressLabelWidth, 22, SWP_NOZORDER|SWP_NOACTIVATE)
-	setWindowPos(a.workerLabel, margin, margin+buttonHeight+10, 150, 24, SWP_NOZORDER|SWP_NOACTIVATE)
-	setWindowPos(a.workerSelect, margin+154, margin+buttonHeight+6, 90, 240, SWP_NOZORDER|SWP_NOACTIVATE)
-	setWindowPos(a.progressBar, margin, margin+buttonHeight+10+downloadSettingsHeight, width-margin*2, progressHeight, SWP_NOZORDER|SWP_NOACTIVATE)
-
-	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
-	logTop := height - margin - logHeight
-	pathHeight := logTop - pathTop - margin
-	if pathHeight < 0 {
-		pathHeight = 0
+	setWindowPos(a.workerLabel, 336, margin+8, 64, 22, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.workerSelect, 410, margin+5, 76, 240, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.workerHint, 498, margin+8, 54, 22, SWP_NOZORDER|SWP_NOACTIVATE)
+	statusWidth, statusY := int32(220), margin+8
+	progressWidth := width - margin*2
+	if width < 820 {
+		statusWidth, statusY = 180, geometry.progressTop-5
+		progressWidth = max(int32(0), progressWidth-statusWidth-12)
 	}
+	setWindowPos(a.progressLabel, width-margin-statusWidth, statusY, statusWidth, 22, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.progressBar, margin, geometry.progressTop, progressWidth, 12, SWP_NOZORDER|SWP_NOACTIVATE)
+	pathTop, logTop, pathHeight := geometry.pathTop, geometry.logTop, geometry.pathHeight
 
-	setWindowPos(a.logEdit, margin, logTop, width-margin*2, logHeight, SWP_NOZORDER|SWP_NOACTIVATE)
+	setWindowPos(a.logEdit, margin, logTop, width-margin*2, geometry.logHeight, SWP_NOZORDER|SWP_NOACTIVATE)
 
 	contentHeight := int32(len(a.rows)) * (rowHeight + rowGap)
 	if contentHeight > 0 {
@@ -512,29 +510,10 @@ func (a *App) setScrollPos(pos int32) {
 func (a *App) maxScroll() int32 {
 	rect := getClientRect(a.hwnd)
 	height := rect.Bottom - rect.Top
-	margin := int32(12)
-	buttonHeight := int32(34)
-	progressHeight := int32(18)
 	rowHeight := int32(28)
 	rowGap := int32(8)
 
-	logHeight := height / 3
-	if logHeight < 190 {
-		logHeight = 190
-	}
-	if logHeight > height-220 {
-		logHeight = height - 220
-	}
-	if logHeight < 140 {
-		logHeight = 140
-	}
-
-	pathTop := margin + buttonHeight + 10 + downloadSettingsHeight + progressHeight + margin
-	logTop := height - margin - logHeight
-	pathHeight := logTop - pathTop - margin
-	if pathHeight < 0 {
-		pathHeight = 0
-	}
+	pathHeight := calculateVerticalLayout(height).pathHeight
 
 	contentHeight := int32(len(a.rows)) * (rowHeight + rowGap)
 	if contentHeight > 0 {

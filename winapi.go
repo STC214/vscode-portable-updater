@@ -54,6 +54,10 @@ type RECT struct {
 	Bottom int32
 }
 
+type MINMAXINFO struct {
+	Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize POINT
+}
+
 type SCROLLINFO struct {
 	CbSize    uint32
 	FMask     uint32
@@ -101,6 +105,7 @@ const (
 	ES_READONLY    = 0x0800
 
 	BS_OWNERDRAW       = 0x0000000B
+	SS_RIGHT           = 0x00000002
 	CBS_DROPDOWNLIST   = 0x0003
 	CB_ADDSTRING       = 0x0143
 	CB_GETCOUNT        = 0x0146
@@ -128,6 +133,7 @@ const (
 	WM_DESTROY         = 0x0002
 	WM_SIZE            = 0x0005
 	WM_CLOSE           = 0x0010
+	WM_GETMINMAXINFO   = 0x0024
 	WM_DRAWITEM        = 0x002B
 	WM_COMMAND         = 0x0111
 	WM_SETFONT         = 0x0030
