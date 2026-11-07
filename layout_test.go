@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"unsafe"
 )
@@ -44,6 +45,35 @@ func TestToolbarFirstRowLayout(t *testing.T) {
 			t.Fatal("layout changed settings or captions")
 		}
 		t.Logf("width=%d client=%d first-row aligned; narrow=%v", width, client.Right, client.Right < 820)
+	}
+}
+
+func TestToolbarScrollbarResizeReentry(t *testing.T) {
+	a := reviewWorkerApp(t, 1)
+	reviewWorkerResizeHosts.Store(a.hwnd, true)
+	for _, width := range []int32{600, 850, 980} {
+		setWindowPos(a.hwnd, 0, 0, width, 760, SWP_NOZORDER|SWP_NOACTIVATE)
+		for _, rows := range []int{1, 40, 1, 40} {
+			a.config.Paths = make([]string, rows)
+			for i := range a.config.Paths {
+				a.config.Paths[i] = fmt.Sprintf("path%d", i)
+			}
+			a.rebuildPathRows()
+			a.layout()
+			log := reviewWindowRect(t, a.logEdit)
+			remove := reviewWindowRect(t, a.rows[0].remove)
+			if remove.Right != log.Right {
+				t.Errorf("WM_SIZE reentry left stale row geometry: width=%d rows=%d delete.Right=%d log.Right=%d", width, rows, remove.Right, log.Right)
+			}
+			status := reviewWindowRect(t, a.progressLabel)
+			client := getClientRect(a.hwnd)
+			if client.Right < 820 && status.Top < reviewWindowRect(t, a.updateButton).Bottom+4 {
+				t.Error("status did not reflow after scrollbar changed client width")
+			}
+			if a.layingOut || a.layoutPending {
+				t.Fatal("layout did not finish stabilizing")
+			}
+		}
 	}
 }
 

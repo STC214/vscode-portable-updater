@@ -98,6 +98,8 @@
 
 同时，`dist/` 目录也适合作为发布目录，把所有构建产物集中管理。
 
+发行附件只包含标准 EXE 和校验文件；运行配置、缓存为本机数据，不纳入版本控制。旧版 `autoupdata_vscode.exe` 已由 `vscode-portable-updater.exe` 取代。
+
 ## 项目结构
 
 - `main.go`：程序入口

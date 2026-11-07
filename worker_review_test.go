@@ -16,10 +16,19 @@ const testCBNSelEndOK = 9
 const testCBNSelEndCancel = 10
 
 var reviewWorkerHosts sync.Map
+var reviewWorkerResizeHosts sync.Map
 var reviewWorkerEvents sync.Map
 var reviewWorkerClassOnce sync.Once
 var reviewWorkerClassError error
 var reviewWorkerWndProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	if msg == WM_SIZE {
+		if _, enabled := reviewWorkerResizeHosts.Load(HWND(hwnd)); enabled {
+			if value, ok := reviewWorkerHosts.Load(HWND(hwnd)); ok {
+				value.(*App).layout()
+				return 0
+			}
+		}
+	}
 	if msg == uiInvokeMessage {
 		if value, ok := reviewWorkerHosts.Load(HWND(hwnd)); ok {
 			value.(*App).runUITasks()
@@ -63,7 +72,12 @@ func reviewWorkerApp(t *testing.T, rows int) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reviewWorkerHosts.Delete(parent); reviewWorkerEvents.Delete(parent); destroyWindow(parent) })
+	t.Cleanup(func() {
+		reviewWorkerResizeHosts.Delete(parent)
+		reviewWorkerHosts.Delete(parent)
+		reviewWorkerEvents.Delete(parent)
+		destroyWindow(parent)
+	})
 	paths := make([]string, rows)
 	for i := range paths {
 		paths[i] = fmt.Sprintf("path%d", i)

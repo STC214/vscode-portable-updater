@@ -56,8 +56,10 @@ type App struct {
 	storageDir string
 	cacheDir   string
 
-	scrollPos int32
-	busy      bool
+	scrollPos     int32
+	busy          bool
+	layingOut     bool
+	layoutPending bool
 
 	uiMu    sync.Mutex
 	uiTasks []func()
@@ -383,6 +385,25 @@ func (a *App) syncPathsFromUI() {
 }
 
 func (a *App) layout() {
+	if a.hwnd == 0 {
+		return
+	}
+	if a.layingOut {
+		a.layoutPending = true
+		return
+	}
+	a.layingOut = true
+	defer func() { a.layingOut = false }()
+	for {
+		a.layoutPending = false
+		a.layoutPass()
+		if !a.layoutPending {
+			return
+		}
+	}
+}
+
+func (a *App) layoutPass() {
 	if a.hwnd == 0 {
 		return
 	}
