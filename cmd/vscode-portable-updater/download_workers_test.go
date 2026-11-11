@@ -167,7 +167,22 @@ func TestWorkerUpdaterIntegration(t *testing.T) {
 		t.Run(fmt.Sprint(workers), func(t *testing.T) {
 			var requests atomic.Int32
 			var logs []string
-			u := NewUpdaterWithWorkers(t.TempDir(), workers, func(s string) { logs = append(logs, s) }, nil)
+			a := reviewWorkerApp(t, 1)
+			downloadUpdates := 0
+			u := NewUpdaterWithWorkers(t.TempDir(), workers, func(s string) { logs = append(logs, s) }, func(p ProgressUpdate) {
+				a.invokeUI(func() {
+					a.setProgress(p.Label, p.Percent)
+					if p.Label == "下载更新包" {
+						downloadUpdates++
+						if got := int(sendMessage(a.progressBar, WM_USER+8, 0, 0)); got != p.Percent {
+							t.Errorf("updater/UI progress mismatch: %d != %d", got, p.Percent)
+						}
+						if got := getWindowText(a.progressLabel); got != fmt.Sprintf("%s %d%%", p.Label, p.Percent) {
+							t.Errorf("updater/UI label mismatch: %q", got)
+						}
+					}
+				})
+			})
 			u.client.Transport = updateTestTransport(func(r *http.Request) (*http.Response, error) {
 				var start, end int64
 				if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil {
@@ -184,6 +199,10 @@ func TestWorkerUpdaterIntegration(t *testing.T) {
 			pkg, err := u.getLatestPackage(LatestRelease{Arch: "x64", Version: "1.100.0", URL: "https://fixture.test/valid.zip"})
 			if err != nil {
 				t.Fatal(err)
+			}
+			a.runUITasks()
+			if downloadUpdates < 3 {
+				t.Errorf("too few download updates routed through updater/UI: %d", downloadUpdates)
 			}
 			got, err := os.ReadFile(pkg.ZipPath)
 			if err != nil || !bytes.Equal(got, data) || requests.Load() != int32(workers) {

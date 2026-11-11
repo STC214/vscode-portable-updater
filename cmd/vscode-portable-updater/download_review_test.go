@@ -302,7 +302,7 @@ func TestDownloadReviewIdleTimeout(t *testing.T) {
 			parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			start := time.Now()
-			err = downloadRange(parent, client, "https://fixture.test/paced", file, 0, 7, 8, `"stable"`, 200*time.Millisecond)
+			err = downloadRange(parent, client, "https://fixture.test/paced", file, 0, 7, 8, `"stable"`, 200*time.Millisecond, nil)
 			if stalled {
 				if !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("want idle deadline: %v", err)

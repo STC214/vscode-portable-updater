@@ -176,6 +176,11 @@ func downloadRanges(parent context.Context, client *http.Client, url, path strin
 	var mu sync.Mutex
 	var firstErr error
 	var completed int64
+	// Track each segment's high-water mark, not bytes transferred across attempts:
+	// retries overwrite the same offsets and must not inflate the progress bar.
+	highWater := make([]int64, workers)
+	var received int64
+	lastPercent := 0
 	if report != nil {
 		report(0)
 	}
@@ -201,7 +206,19 @@ func downloadRanges(parent context.Context, client *http.Client, url, path strin
 					}
 				}
 				attemptsMade++
-				err = downloadRange(ctx, client, url, file, start, end, total, validator, downloadIdleTimeout)
+				err = downloadRange(ctx, client, url, file, start, end, total, validator, downloadIdleTimeout, func(written int64) {
+					mu.Lock()
+					defer mu.Unlock()
+					if written > highWater[i] {
+						received += written - highWater[i]
+						highWater[i] = written
+					}
+					percent := min(99, int(float64(received)/float64(total)*100))
+					if report != nil && firstErr == nil && percent > lastPercent {
+						lastPercent = percent
+						report(percent)
+					}
+				})
 				if err == nil || errors.Is(err, errRangeIgnored) {
 					break
 				}
@@ -216,9 +233,6 @@ func downloadRanges(parent context.Context, client *http.Client, url, path strin
 				return
 			}
 			completed += end - start + 1
-			if report != nil && firstErr == nil {
-				report(min(99, int(float64(completed)/float64(total)*100)))
-			}
 		}()
 	}
 	wg.Wait()
@@ -247,7 +261,7 @@ func (r *downloadIdleReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func downloadRange(parent context.Context, client *http.Client, url string, file *os.File, start, end, total int64, validator string, idleTimeout time.Duration) (resultErr error) {
+func downloadRange(parent context.Context, client *http.Client, url string, file *os.File, start, end, total int64, validator string, idleTimeout time.Duration, report func(int64)) (resultErr error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	// A fixed two-minute segment deadline makes slow but healthy links restart
@@ -299,7 +313,8 @@ func downloadRange(parent context.Context, client *http.Client, url string, file
 		return fmt.Errorf("range length mismatch: %d != %d", resp.ContentLength, length)
 	}
 	reader := &downloadIdleReader{reader: resp.Body, timer: idle, timeout: idleTimeout}
-	n, err := io.CopyBuffer(io.NewOffsetWriter(file, start), io.LimitReader(reader, length), make([]byte, 256*1024))
+	writer := &downloadProgressWriter{writer: io.NewOffsetWriter(file, start), report: report}
+	n, err := io.CopyBuffer(writer, io.LimitReader(reader, length), make([]byte, 256*1024))
 	if err != nil {
 		return err
 	}
@@ -312,4 +327,19 @@ func downloadRange(parent context.Context, client *http.Client, url string, file
 		return fmt.Errorf("range body exceeds expected length or failed: %v", err)
 	}
 	return nil
+}
+
+type downloadProgressWriter struct {
+	writer  io.Writer
+	written int64
+	report  func(int64)
+}
+
+func (w *downloadProgressWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.written += int64(n)
+	if n > 0 && w.report != nil {
+		w.report(w.written)
+	}
+	return n, err
 }
